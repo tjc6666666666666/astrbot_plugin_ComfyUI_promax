@@ -210,8 +210,6 @@ img2img
 
 
 
-### 项目地址
-- GitHub：https://github.com/tjc6666666666666/astrbot_plugin_ComfyUI_promax
 
 ### 问题反馈
 如遇到问题，请提供以下信息：
@@ -223,5 +221,3 @@ img2img
 
 ---
 
-**版本信息**：v3.2  
-**更新日期**：2024年  
