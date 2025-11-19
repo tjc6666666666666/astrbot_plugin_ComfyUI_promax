@@ -1,0 +1,229 @@
+{
+    "comfyui_url": {
+        "description": "ComfyUI服务器列表",
+        "type": "list",
+        "default": [],
+        "hint": "格式：[\"URL1,名称1\", \"URL2,名称2\", ...]，URL需包含http/https，如[\"http://127.0.0.1:8188,服务器1\", \"http://192.168.1.2:8188,服务器2\"]",
+        "items": {
+            "type": "string"
+        },
+        "obvious_hint": true
+    },
+    "ckpt_name": {
+        "description": "ComfyUI默认模型文件",
+        "type": "string",
+        "default": "WAI_NSFW-illustrious-SDXL.safetensors",
+        "hint": "需与所有ComfyUI服务器models/checkpoints目录下的文件名一致",
+        "obvious_hint": true
+    },
+    "model_config": {
+        "description": "模型配置列表",
+        "type": "list",
+        "default": ["WAI_NSFW-illustrious-SDXL.safetensors,默认模型", "realisticVisionV51_v51VAE.safetensors,写实风格", "sd_xl_base_1.0.safetensors,SDXL基础"],
+        "hint": "格式：[\"文件名1,描述1\", \"文件名2,描述2\", ...]，文件名需与所有ComfyUI服务器models/checkpoints目录下的文件一致，描述用于展示（例：[\"model1.safetensors,动漫风格\", \"model2.safetensors,写实风格\"]）",
+        "items": {
+            "type": "string"
+        }
+    },
+    "seed": {
+        "description": "种子ID",
+        "type": "string",
+        "default": "随机",
+        "hint": "用于控制生成结果的随机性，输入'随机'则自动生成随机种子"
+    },
+    "num_inference_steps": {
+        "description": "推理步数",
+        "type": "int",
+        "default": 20,
+        "hint": "生成图片时的采样步数，数值越大质量越高但速度越慢"
+    },
+    "cfg": {
+        "description": "CFG系数",
+        "type": "float",
+        "default": 8.0,
+        "hint": "控制提示词对生成结果的影响强度，建议1.0-15.0"
+    },
+    "default_width": {
+        "description": "默认宽度",
+        "type": "int",
+        "default": 512,
+        "hint": "文生图/图生图默认宽度像素值，需在min_width~max_width范围内"
+    },
+    "default_height": {
+        "description": "默认高度",
+        "type": "int",
+        "default": 512,
+        "hint": "文生图/图生图默认高度像素值，需在min_height~max_height范围内"
+    },
+    "txt2img_batch_size": {
+        "description": "文生图默认批量数",
+        "type": "int",
+        "default": 1,
+        "hint": "文生图每次任务的默认生成数量，需≤max_txt2img_batch"
+    },
+    "img2img_batch_size": {
+        "description": "图生图默认批量数",
+        "type": "int",
+        "default": 1,
+        "hint": "图生图每次任务的默认生成数量，需≤max_img2img_batch"
+    },
+    "max_txt2img_batch": {
+        "description": "文生图最大批量数",
+        "type": "int",
+        "default": 6,
+        "hint": "文生图单次任务最多生成的图片数量（建议1-20）"
+    },
+    "max_img2img_batch": {
+        "description": "图生图最大批量数",
+        "type": "int",
+        "default": 6,
+        "hint": "图生图单次任务最多生成的图片数量（建议1-20）"
+    },
+    "max_task_queue": {
+        "description": "最大任务队列数",
+        "type": "int",
+        "default": 10,
+        "hint": "同时排队的最大任务数（建议1-50，避免服务器压力过大）"
+    },
+    "min_width": {
+        "description": "最小宽度限制",
+        "type": "int",
+        "default": 64,
+        "hint": "生成图片的最小宽度（≥64，且<max_width）"
+    },
+    "max_width": {
+        "description": "最大宽度限制",
+        "type": "int",
+        "default": 2000,
+        "hint": "生成图片的最大宽度（≤4096，且>min_width）"
+    },
+    "min_height": {
+        "description": "最小高度限制",
+        "type": "int",
+        "default": 64,
+        "hint": "生成图片的最小高度（≥64，且<max_height）"
+    },
+    "max_height": {
+        "description": "最大高度限制",
+        "type": "int",
+        "default": 2000,
+        "hint": "生成图片的最大高度（≤4096，且>min_height）"
+    },
+    "sampler_name": {
+        "description": "采样器名称",
+        "type": "string",
+        "default": "euler",
+        "hint": "ComfyUI支持的采样器，如euler、dpmpp_2m、ddim等"
+    },
+    "scheduler": {
+        "description": "调度器类型",
+        "type": "string",
+        "default": "simple",
+        "hint": "采样调度器，如simple、karras、exponential等"
+    },
+    "negative_prompt": {
+        "description": "负提示词",
+        "type": "string",
+        "default": "worst quality, low quality, lowres, watermark, blurry",
+        "hint": "用于排除低质量元素的提示词，多个元素用逗号分隔"
+    },
+    "enable_translation": {
+        "description": "启用中文翻译(已弃用)",
+        "type": "bool",
+        "default": false,
+        "hint": "此功能已在v1.5版本中移除，配置选项保留仅为兼容旧版本"
+    },
+    "default_denoise": {
+        "description": "图生图默认噪声系数",
+        "type": "float",
+        "default": 0.7,
+        "hint": "控制原图对生成结果的影响程度（0-1之间），值越大原图影响越小，仅图生图使用"
+    },
+    "open_time_ranges": {
+        "description": "图片生成开放时间段",
+        "type": "string",
+        "default": "7:00-8:00,11:00-14:00,17:00-24:00",
+        "hint": "支持多个时间段，用逗号分隔，格式为HH:MM-HH:MM（如'9:00-12:00,18:00-22:00'），支持24小时制和跨零点（如'23:00-2:00'）"
+    },
+    "queue_check_delay": {
+        "description": "队列检查延迟时间",
+        "type": "int",
+        "default": 30,
+        "hint": "任务下发后，延迟N秒开始检查队列（避免刚下发未入队导致误判，建议10-120秒）"
+    },
+    "queue_check_interval": {
+        "description": "队列检查间隔",
+        "type": "int",
+        "default": 5,
+        "hint": "每次检查队列的时间间隔（建议3-30秒，避免频繁请求）"
+    },
+    "empty_queue_max_retry": {
+        "description": "空队列最大重试次数",
+        "type": "int",
+        "default": 2,
+        "hint": "连续检测到空队列N次后判定任务失败（建议1-5次，避免网络波动误判）"
+    },
+    "lora_config": {
+        "description": "LoRA配置列表",
+        "type": "list",
+        "default": ["111.stf,儿童", "6666.stf,老人"],
+        "hint": "格式：[\"文件名1,描述1\", \"文件名2,描述2\", ...]，文件名需与所有ComfyUI服务器models/lora目录下的文件一致，描述用于展示（例：[\"child_lora.safetensors,儿童风格\", \"old_man_lora.safetensors,老人风格\"]）",
+        "items": {
+            "type": "string"
+        }
+    },
+    "enable_image_encrypt": {
+        "description": "启用图像加密",
+        "type": "bool",
+        "default": true,
+        "hint": "控制是否启用希尔伯特曲线图像加密，true=加密，false=不加密"
+    },
+    "enable_help_image": {
+        "description": "启用帮助信息转图片",
+        "type": "bool",
+        "default": false,
+        "hint": "控制是否将帮助信息转换为精美图片形式，true=转图片，false=文本形式"
+    },
+    "help_server_port": {
+        "description": "帮助图片服务器端口",
+        "type": "int",
+        "default": 8080,
+        "hint": "临时HTTP服务器端口，用于提供HTML转图片服务，如果端口占用会自动随机选择其他端口"
+    },
+    "enable_auto_save": {
+        "description": "启用自动保存图片",
+        "type": "bool",
+        "default": true,
+        "hint": "控制是否自动保存每天生成的图片到本地目录，true=保存，false=不保存"
+    },
+    "auto_save_directory": {
+        "description": "自动保存目录",
+        "type": "string",
+        "default": "output",
+        "hint": "图片自动保存的根目录名，将在main.py同目录下创建，默认为output。目录结构：根目录/YYYY/MM/DD/"
+    },
+    "enable_output_zip": {
+        "description": "启用图片打包下载功能",
+        "type": "bool",
+        "default": false,
+        "hint": "控制是否启用comfyuioutput命令，允许用户打包下载当天生成的图片，true=启用，false=禁用"
+    },
+    "daily_download_limit": {
+        "description": "每日下载限制次数",
+        "type": "int",
+        "default": 1,
+        "hint": "每个用户每天最多可以下载图片包的次数（建议1-10次）"
+    },
+    "only_own_images": {
+        "description": "仅允许下载自己生成的图片",
+        "type": "bool",
+        "default": true,
+        "hint": "控制用户是否只能下载自己生成的图片，true=只能下载自己的，false=可以下载所有图片"
+    },
+    "max_concurrent_tasks_per_user": {
+        "description": "每个用户最大同时任务数",
+        "type": "int",
+        "default": 3,
+        "hint": "每个QQ号同时排队的最大任务数（建议1-10，防止单个用户占用过多资源）"
+    }
+}
