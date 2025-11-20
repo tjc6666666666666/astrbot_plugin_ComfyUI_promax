@@ -30,7 +30,7 @@ import base64
     "mod-comfyui",
     "",
     "使用多服务器ComfyUI文生图/图生图（支持模型选择、LoRA和服务器轮询）。\n开放时间：{open_time_ranges}\n文生图：发送「aimg <提示词> [宽X,高Y] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]」参数可选，非必填（例：/aimg girl 宽512,高768 批量2 model:写实风格 lora:儿童:0.8 lora:可爱!1.0）\n图生图：发送「img2img <提示词> [噪声:数值] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]」+ 图片或引用包含图片的消息（例：img2img 猫咪 噪声:0.7 批量2 model:动漫风格 lora:动物:1.2!0.9 + 图片/引用图片消息）\n输出压缩包：发送「comfyuioutput」获取今天生成的图片压缩包（需开启自动保存）\n模型使用说明：\n  - 格式：model:描述（描述对应配置中的模型描述）\n  - 例：model:写实风格\nLoRA使用说明：\n  - 基础格式：lora:描述（使用默认强度1.0/1.0，描述对应配置中的LoRA描述）\n  - 仅模型强度：lora:描述:0.8（strength_model=0.8）\n  - 仅CLIP强度：lora:描述!1.0（strength_clip=1.0）\n  - 双强度：lora:描述:0.8!1.3（model=0.8, clip=1.3）\n  - 多LoRA：空格分隔多个lora参数（例：lora:儿童 lora:学生:0.9）\n多服务器轮询处理，所有生成图片将合并为一条消息发送，未指定参数则用默认配置（文生图默认批量数：{txt2img_batch_size}，图生图默认批量数：{img2img_batch_size}，默认噪声系数：{default_denoise}，默认模型：{ckpt_name}）。\n限制说明：文生图最大批量{max_txt2img_batch}，图生图最大批量{max_img2img_batch}，分辨率范围{min_width}~{max_width}x{min_height}~{max_height}，任务队列最大{max_task_queue}个，每用户最大并发{max_concurrent_tasks_per_user}个\n可用模型列表：\n{model_list_desc}\n可用LoRA列表：\n{lora_list_desc}",
-    "3.2.1"  # 版本更新：支持图片压缩包输出功能
+    "3.2"  # 版本更新：支持图片压缩包输出功能
 )
 class ModComfyUI(Star):
     # 服务器状态类（增加worker引用）
@@ -987,13 +987,10 @@ class ModComfyUI(Star):
             else:
                 raise Exception(f"服务器{server.name}处理任务失败，原因未知")
                 
-        except Exception as e:
-            # 任务处理失败，减少用户任务计数
+        finally:
+            # 无论成功还是失败，都确保减少用户任务计数
             if user_id:
                 await self._decrement_user_task_count(user_id)
-            raise e
-                
-        finally:
             # 确保释放服务器
             self._mark_server_busy(server, False)
 
@@ -1073,10 +1070,6 @@ class ModComfyUI(Star):
         
         # 一次性发送合并的消息
         await event.send(event.chain_result(merged_chain))
-        
-        # 任务完成，减少用户任务计数
-        if user_id:
-            await self._decrement_user_task_count(user_id)
 
     async def _send_comfyui_prompt(self, server: ServerState, comfy_prompt: Dict[str, Any]) -> str:
         url = f"{server.url}/prompt"
@@ -2444,31 +2437,4 @@ class ModComfyUI(Star):
             + lora_feedback
         ))
 
-
-
-        
-        async def handle_help(request):
-            """处理帮助页面请求"""
-            try:
-                content = generate_help_html()
-                return web.Response(text=content, content_type='text/html')
-            except Exception as e:
-                logger.error(f"处理帮助页面请求失败: {e}")
-                return web.Response(text="服务器错误", status=500)
-
-        # 创建应用
-        app = web.Application()
-        app.router.add_get('/', handle_help)
-
-        
-        # 创建runner
-        self.help_server_runner = web.AppRunner(app)
-        await self.help_server_runner.setup()
-        
-        # 创建site
-        self.help_server_site = web.TCPSite(self.help_server_runner, 'localhost', self.actual_help_port)
-        await self.help_server_site.start()
-        
-        logger.info(f"帮助图片服务器已启动: http://localhost:{self.actual_help_port}")
-        return f"http://localhost:{self.actual_help_port}"
 
