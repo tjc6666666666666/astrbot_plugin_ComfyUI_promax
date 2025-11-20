@@ -1,223 +1,603 @@
-# Astrbot ComfyUI 插件使用文档
+# 🎨 Astrbot ComfyUI Plugin Pro Max
 
-## 📖 插件简介
+[![Version](https://img.shields.io/badge/version-3.3-blue.svg)](https://github.com/tjc6666666666666/astrbot_plugin_ComfyUI_promax)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
-这是一个功能强大的Astrbot插件，集成了ComfyUI AI绘画功能，支持文生图、图生图、多服务器轮询、模型选择、LoRA支持等高级功能。
+一个功能强大的 Astrbot 插件，集成了 ComfyUI AI 绘画功能，支持文生图、图生图、多服务器轮询、模型选择、LoRA 支持、自定义 Workflow 等高级功能。
 
-## 🚀 主要功能
+## ✨ 主要特性
 
-### 🎨 AI绘画功能
-- **文生图**：通过文字描述生成图片
-- **图生图**：基于现有图片进行二次创作
-- **批量生成**：支持一次生成多张图片
-- **多服务器支持**：自动轮询多个ComfyUI服务器
+### 🎯 AI 绘画核心功能
+- **文生图 (Text-to-Image)**：通过文字描述生成高质量图片
+- **图生图 (Image-to-Image)**：基于现有图片进行二次创作
+- **批量生成**：支持一次生成多张图片，提高效率
+- **多服务器轮询**：智能分配任务到多个 ComfyUI 服务器
 
 ### 🛠️ 高级特性
-- **模型选择**：支持切换不同的AI模型
-- **LoRA支持**：可使用多个LoRA模型增强效果
-- **图片加密**：希尔伯特曲线图像加密保护
-- **自动保存**：生成的图片自动保存到本地
-- **压缩包下载**：支持打包下载当日生成的图片
-- **帮助系统**：支持文本和图片形式的帮助信息
+- **🎭 模型选择**：支持切换不同的 AI 模型，满足不同风格需求
+- **✨ LoRA 支持**：可使用多个 LoRA 模型增强效果
+- **🔐 图片加密**：希尔伯特曲线图像加密保护
+- **💾 自动保存**：生成的图片自动保存到本地
+- **📦 压缩包下载**：支持打包下载当日生成的图片
+- **📚 智能帮助系统**：支持文本和图片形式的帮助信息
+- **⚙️ 自定义 Workflow**：支持用户自定义工作流，扩展功能无限可能
 
-## 📋 安装要求
+### 🎨 Workflow 系统
+- **图像加密解密**：希尔伯特曲线加密/解密工作流
+- **可扩展架构**：轻松添加新的自定义工作流
+- **统一帮助系统**：每个工作流都有详细的帮助文档和图片说明
+- **参数别名支持**：支持中英文参数名，使用更便捷
+- **配置注入功能**：自动同步主程序的模型、LoRA、采样器配置
+- **智能参数验证**：自动验证参数类型、范围和必需性
+- **缓存机制**：帮助图片自动缓存，提高响应速度
 
-### Python依赖包
+## 📦 安装要求
+
+### Python 依赖
+```bash
+pip install -r requirements.txt
+```
+
+**requirements.txt 内容：**
 ```txt
 aiohttp>=3.8.0
 Pillow>=9.0.0
 aiofiles>=0.8.0
+aiosqlite>=0.17.0
 asyncio-throttle>=1.0.0
 ```
 
-### ComfyUI自定义节点
-需要在ComfyUI中安装以下自定义节点：
+### ComfyUI 环境要求
+- **ComfyUI**: 确保已安装并运行 ComfyUI
+- **Python**: 3.8 或更高版本
+- **GPU**: 推荐 NVIDIA GPU（支持 CUDA）
+
+### ComfyUI 自定义节点（可选）
+如果需要使用图片加密功能，需要在 ComfyUI 中安装以下自定义节点：
 
 1. **图像压缩器** (`image_compressor`)
    - 作用：压缩和优化输入图片
-   - 安装位置：ComfyUI/custom_nodes/image_compressor
+   - 安装位置：`ComfyUI/custom_nodes/image_compressor`
 
 2. **希尔伯特图像加密** (`hilbert_image_encrypt`)
    - 作用：对生成的图片进行加密保护
-   - 安装位置：ComfyUI/custom_nodes/hilbert_image_encrypt
+   - 安装位置：`ComfyUI/custom_nodes/hilbert_image_encrypt`
 
 > ⚠️ **重要提示**：如果开启了图片解密功能，用户需要自行搜索"小番茄图片混淆"工具进行解密。
 
+## 🚀 快速开始
+
+### 1. 插件安装
+将插件文件放置到 Astrbot 的插件目录中。
 
 
 
+### 2. 启动插件
+重启 Astrbot，插件将自动加载并连接到 ComfyUI 服务器。
 
-## 📝 使用方法
+## 📝 使用指南
 
-### 文生图指令
+### 🎨 文生图指令
 ```
 aimg <提示词> [宽X,高Y] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]
 ```
 
 **示例：**
-```
-aimg 美少女 宽512,高768 批量2 model:写实风格 lora:儿童:0.8 lora:可爱!1.0
+```bash
+# 基础用法
+aimg 美少女
+
+# 完整参数
+aimg 可爱女孩 宽512,高768 批量2 model:写实风格 lora:儿童:0.8 lora:可爱!1.0
+
+# 高分辨率
+aimg 风景画 宽1024,高768 批量1 model:风景风格
 ```
 
-### 图生图指令
+### 🖼️ 图生图指令
 ```
 img2img <提示词> [噪声:数值] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]] + 图片
 ```
 
 **示例：**
-```
-img2img 猫咪 噪声:0.7 批量2 model:动漫风格 lora:动物:1.2!0.9
-```
-（发送时需要附带图片或引用包含图片的消息）
+```bash
+# 基础图生图
+img2img 猫咪 噪声:0.7
 
-### 压缩包下载指令
+# 完整参数（需要附带图片）
+img2img 动漫角色 噪声:0.5 批量2 model:动漫风格 lora:角色:1.2!0.9
+```
+
+### 🔧 自定义 Workflow 指令
+```
+<前缀> [参数名:值 ...] [+ 图片（如需要）]
+```
+
+**示例：**
+```bash
+# 图像加密
+encrypt 模式:encrypt 启用:true + 图片
+
+# 图像解密
+encrypt 模式:decrypt + 加密图片
+
+# 使用别名
+encrypt mode:decrypt enable:false + 图片
+```
+
+### 📦 压缩包下载
 ```
 comfyuioutput
 ```
+获取今天生成的所有图片的压缩包。
 
-### 帮助指令
+### 📚 帮助信息
+```bash
+aimg          # 文生图帮助
+img2img       # 图生图帮助
+encrypt       # 工作流帮助（示例）
 ```
-aimg
-img2img
-```
-（单独输入，无参数）
 
-## 🎯 参数详解
+## ⚙️ 参数详解
 
-### 模型选择
+### 🎭 模型选择
 - **格式**：`model:描述`
 - **示例**：`model:写实风格`
-- **说明**：描述对应配置中的模型描述
+- **说明**：描述对应配置文件中的模型描述
 
-### LoRA使用
-- **基础格式**：`lora:描述`（使用默认强度1.0/1.0）
+### ✨ LoRA 使用
+- **基础格式**：`lora:描述`（使用默认强度 1.0/1.0）
 - **仅模型强度**：`lora:描述:0.8`（strength_model=0.8）
-- **仅CLIP强度**：`lora:描述!1.0`（strength_clip=1.0）
+- **仅 CLIP 强度**：`lora:描述!1.0`（strength_clip=1.0）
 - **双强度**：`lora:描述:0.8!1.3`（model=0.8, clip=1.3）
-- **多LoRA**：空格分隔多个lora参数
+- **多 LoRA**：空格分隔多个 lora 参数
 
-### 分辨率设置
-- **格式**：`宽X,高Y`
-- **示例**：`宽512,高768`
-- **范围**：64~2000像素
+**示例：**
+```bash
+lora:儿童 lora:学生:0.9 lora:可爱!1.2
+```
 
-### 批量设置
-- **格式**：`批量N`
-- **示例**：`批量2`
-- **限制**：文生图最大6张，图生图最大6张
+### 📏 分辨率设置
+- **格式**：`宽X,高Y` 或 `宽,高`
+- **示例**：`宽512,高768` 或 `512,768`
+- **限制**：64~2000 像素范围
 
-### 噪声系数（仅图生图）
-- **格式**：`噪声:数值`
-- **示例**：`噪声:0.7`
-- **范围**：0-1之间
+### 🎲 其他参数
+- **批量数**：`批量N`（N 为数量，最大 6）
+- **噪声系数**：`噪声:数值`（0.0~1.0，默认 0.7）
+- **种子**：`种子:数值`（-1 为随机）
 
-## 📊 功能限制
+## 🔧 配置说明
 
-### 时间限制
-- **开放时间**：默认为 7:00-8:00,11:00-14:00,17:00-24:00
-- **可配置**：支持自定义时间段和跨零点设置
+### 🌐 服务器配置
+```json
+{
+  "comfyui_url": ["http://127.0.0.1:8188", "http://192.168.1.100:8188"],
+  "max_task_queue": 10,
+  "max_failure_count": 3,
+  "retry_delay": 300
+}
+```
 
-### 队列限制
-- **最大任务队列**：10个
-- **每用户最大并发**：3个
-- **文生图最大批量**：6张
-- **图生图最大批量**：6张
+### 🎨 模型配置
+```json
+{
+  "model_config": [
+    {
+      "filename": "v1-5-pruned-emaonly.safetensors",
+      "description": "写实风格"
+    },
+    {
+      "filename": "anime-model.safetensors", 
+      "description": "动漫风格"
+    }
+  ]
+}
+```
 
-### 下载限制
-- **每日下载限制**：1次（可配置）
-- **仅限自己图片**：默认开启
+### ✨ LoRA 配置
+```json
+{
+  "lora_config": [
+    {
+      "filename": "lora1.safetensors",
+      "description": "儿童"
+    },
+    {
+      "filename": "lora2.safetensors",
+      "description": "可爱"
+    }
+  ]
+}
+```
 
-## 🔧 高级功能
+### 🕐 时间限制
+```json
+{
+  "open_time_ranges": "7:00-8:00,11:00-14:00,17:00-24:00"
+}
+```
 
-### 图片加密保护
-- 使用希尔伯特曲线算法对生成的图片进行加密
-- 防止图片被直接识别和滥用
-- 用户需要使用专门的解密工具查看原图
+## 🔌 可扩展 Workflow 系统
 
-### 自动保存系统
-- 按日期自动分类保存：`output/YYYY/MM/DD/`
-- 文件名包含时间戳：`YYYYMMDD_HHMMSS_原文件名`
-- 支持数据库记录用户生成历史
+### 🌟 功能概述
 
-### 多服务器轮询
-- 自动检测服务器健康状态
-- 智能负载均衡分配任务
-- 故障服务器自动重试机制
+插件支持完全可扩展的 Workflow 系统，允许用户通过简单的配置文件创建自定义的 ComfyUI 工作流，无需修改主代码即可无限扩展功能。
 
-### 帮助系统
-- **文本帮助**：详细的文字说明和参数列表
-- **图片帮助**：精美的图片形式帮助文档
-- **实时状态**：显示服务器状态和系统信息
+### 📁 目录结构
+```
+workflow/
+├── encrypt/
+│   ├── config.json      # 工作流配置文件
+│   ├── workflow.json    # ComfyUI 工作流定义
+│   └── help.png         # 自动生成的帮助图片
+├── juxueli/
+│   ├── config.json
+│   ├── workflow.json
+│   └── help.png
+└── your_workflow/
+    ├── config.json
+    ├── workflow.json
+    └── help.png
+```
+
+### 🎯 核心特性
+
+#### 1. 模块化设计
+- **独立模块**：每个 workflow 都是独立的功能模块
+- **热加载**：重启插件后自动加载新模块
+- **零代码扩展**：通过配置文件即可添加新功能
+
+#### 2. 灵活的参数系统
+- **多种参数类型**：text、number、boolean、select、image
+- **智能验证**：自动验证参数类型、范围和必需性
+- **别名支持**：支持中英文参数名和自定义别名
+- **默认值**：为所有参数提供合理的默认值
+
+#### 3. 配置注入功能
+- **模型注入**：自动同步主程序的模型配置
+- **LoRA 注入**：动态显示可用的 LoRA 列表
+- **采样器注入**：自动使用主程序的采样器配置
+- **调度器注入**：自动同步调度器设置
+
+#### 4. 智能帮助系统
+- **自动生成帮助**：每个 workflow 自动生成详细帮助文档
+- **图片帮助**：支持精美的图片形式帮助（与主帮助样式一致）
+- **参数说明**：详细的参数类型、范围和示例说明
+- **缓存机制**：帮助图片自动缓存，提高响应速度
+
+### 📋 配置文件完整规范
+
+#### 基础信息字段
+```json
+{
+  "name": "工作流显示名称",
+  "prefix": "命令前缀",
+  "description": "工作流描述",
+  "version": "1.0.0",
+  "author": "作者",
+  "input_mappings": {
+    "6": {
+      "positive_prompt": {
+        "type": "text",
+        "required": true,
+        "description": "正面提示词",
+        "aliases": ["prompt", "提示词"]
+      }
+    }
+  },
+  "output_mappings": {
+    "9": {
+      "images": {
+        "type": "image",
+        "description": "生成的图片"
+      }
+    }
+  },
+  "configurable_nodes": [
+    {
+      "node_id": "6",
+      "parameter": "positive_prompt"
+    }
+  ],
+  "node_configs": {
+    "6": {
+      "width": {
+        "type": "number",
+        "required": false,
+        "default": 512,
+        "min": 64,
+        "max": 2048,
+        "description": "图片宽度",
+        "aliases": ["w", "宽度"]
+      },
+      "height": {
+        "type": "number",
+        "required": false,
+        "default": 512,
+        "min": 64,
+        "max": 2048,
+        "description": "图片高度",
+        "aliases": ["h", "高度"]
+      },
+      "steps": {
+        "type": "number",
+        "required": false,
+        "default": 20,
+        "min": 1,
+        "max": 150,
+        "description": "采样步数",
+        "aliases": ["步数"]
+      },
+      "sampler_name": {
+        "type": "select",
+        "required": false,
+        "default": "euler",
+        "options": ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_sde"],
+        "inject_samplers": true,
+        "description": "采样器",
+        "aliases": ["sampler", "采样器"]
+      },
+      "ckpt_name": {
+        "type": "select",
+        "required": false,
+        "default": "v1-5-pruned-emaonly.safetensors",
+        "inject_models": true,
+        "description": "模型",
+        "aliases": ["model", "模型"]
+      }
+    }
+  }
+}
+```
+
+### 🎨 参数类型详解
+
+#### 1. 文本类型 (text)
+```json
+"parameter_name": {
+  "type": "text",
+  "required": true,
+  "description": "参数描述",
+  "aliases": ["别名1", "别名2"]
+}
+```
+
+#### 2. 数字类型 (number)
+```json
+"parameter_name": {
+  "type": "number",
+  "required": false,
+  "default": 512,
+  "min": 0,
+  "max": 1000,
+  "description": "参数描述",
+  "aliases": ["别名1", "别名2"]
+}
+```
+
+#### 3. 布尔类型 (boolean)
+```json
+"parameter_name": {
+  "type": "boolean",
+  "required": false,
+  "default": true,
+  "description": "参数描述",
+  "aliases": ["开启", "关闭"]
+}
+```
+
+#### 4. 选择类型 (select)
+```json
+"parameter_name": {
+  "type": "select",
+  "required": false,
+  "default": "option1",
+  "options": ["option1", "option2", "option3"],
+  "description": "参数描述",
+  "aliases": ["别名1", "别名2"]
+}
+```
+
+#### 5. 图片类型 (image)
+```json
+"parameter_name": {
+  "type": "image",
+  "required": true,
+  "description": "参数描述",
+  "aliases": ["图片", "image_input"]
+}
+```
+
+### 🚀 高级功能
+
+#### 配置注入功能
+通过特殊标记，让 workflow 自动同步主程序配置：
+
+- **`"inject_models": true`**：自动从主程序的 `model_config` 加载可用模型
+- **`"inject_loras": true`**：自动显示可用的 LoRA 列表和描述
+- **`"inject_samplers": true`**：自动使用主程序的默认采样器配置
+- **`"inject_schedulers": true`**：自动使用主程序的默认调度器配置
+
+#### 别名系统
+每个参数都支持多个别名，用户可以使用任何别名：
+
+```json
+{
+  "width": {
+    "aliases": ["w", "宽度", "image_width"]
+  }
+}
+```
+
+用户调用方式：
+- `width:800`
+- `宽度:800`
+- `w:800`
+- `image_width:800`
+
+### 📚 内置 Workflow 示例
+
+#### 1. 图像加密解密 (encrypt)
+```bash
+# 加密图片
+encrypt 模式:encrypt 启用:true + 图片
+
+# 解密图片
+encrypt mode:decrypt + 加密图片
+
+# 使用别名
+encrypt mode:decrypt enable:false + 图片
+```
+
+#### 2. 聚理效果 (juxueli)
+```bash
+# 基础聚理效果
+juxueli 强度:0.8 + 图片
+
+# 完整参数
+juxueli intensity:0.7 mode:enhance + 图片
+```
+
+### 🛠️ 开发新 Workflow
+
+#### 步骤 1：创建目录
+```bash
+mkdir workflow/your_workflow
+cd workflow/your_workflow
+```
+
+#### 步骤 2：创建配置文件 (config.json)
+参考上面的完整规范创建配置文件。
+
+#### 步骤 3：获取工作流定义
+1. 在 ComfyUI 中设计你的工作流
+2. 点击 "Save (API Format)" 保存为 workflow.json
+3. 将文件放入你的 workflow 目录
+
+#### 步骤 4：重启插件
+重启 Astrbot 插件，新 workflow 将自动加载。
+
+#### 步骤 5：测试功能
+```bash
+your_workflow --help  # 查看帮助
+your_workflow 参数:值 + 图片  # 测试功能
+```
+
+### 🎯 最佳实践
+
+1. **参数设计**：
+   - 为所有参数提供合理的默认值
+   - 使用描述性的参数名和别名
+   - 设置适当的参数范围限制
+
+2. **错误处理**：
+   - 明确标记必需参数
+   - 提供详细的参数说明
+   - 使用参数验证避免错误
+
+3. **用户体验**：
+   - 提供中文别名
+   - 编写清晰的描述
+   - 使用一致的命名规范
+
+4. **性能优化**：
+   - 合理使用配置注入
+   - 避免不必要的参数
+   - 优化工作流结构
+
+### 💾 存储配置
+```json
+{
+  "enable_auto_save": true,
+  "auto_save_directory": "output",
+  "enable_output_zip": true,
+  "daily_download_limit": 3,
+  "only_own_images": false
+}
+```
+
+### 📚 帮助系统配置
+```json
+{
+  "enable_help_image": true,
+  "help_server_port": 8080
+}
+```
+
+## 🔌 Workflow 开发
+
+### 📁 目录结构
+```
+workflow/
+├── encrypt/
+│   ├── config.json      # 工作流配置
+│   ├── workflow.json    # ComfyUI 工作流定义
+│   └── help.png         # 自动生成的帮助图片
+└── your_workflow/
+    ├── config.json
+    ├── workflow.json
+    └── help.png
+```
+
+
+
+### 🎯 参数类型支持
+- **text**: 文本输入
+- **number**: 数值输入（支持 min/max）
+- **select**: 下拉选择
+- **boolean**: 布尔值
+- **image**: 图片输入
 
 ## 🛠️ 故障排除
 
 ### 常见问题
 
-1. **服务器连接失败**
-   - 检查ComfyUI服务是否启动
-   - 确认网络连接正常
-   - 验证端口配置正确
+**Q: 插件无法连接到 ComfyUI**
+A: 检查 ComfyUI 是否正常运行，URL 配置是否正确，防火墙设置是否允许连接。
 
-2. **模型加载失败**
-   - 确认模型文件存在于所有服务器
-   - 检查文件名是否匹配配置
-   - 验证模型格式兼容性
+**Q: 生成的图片质量不佳**
+A: 尝试调整提示词、更换模型、调整 CFG 值或使用 LoRA 增强。
 
-3. **LoRA使用失败**
-   - 确认LoRA文件存在于所有服务器
-   - 检查LoRA配置格式正确
-   - 验证强度参数在有效范围内
+**Q: 帮助图片无法显示**
+A: 检查 `enable_help_image` 配置是否为 `true`，确保插件有写入权限。
 
-4. **图片保存失败**
-   - 检查保存目录权限
-   - 确认磁盘空间充足
-   - 验证路径配置正确
-
-5. **压缩包下载失败**
-   - 确认已开启自动保存功能
-   - 检查当日是否有生成图片
-   - 验证下载次数未超限
+**Q: Workflow 无法使用**
+A: 检查 workflow 目录下的配置文件格式是否正确，ComfyUI 是否有对应的自定义节点。
 
 ### 日志查看
-插件运行日志会输出到Astrbot主日志中，包含：
-- 任务执行状态
-- 服务器连接情况
-- 错误信息和调试信息
+插件运行日志会输出到 Astrbot 的日志系统中，可以通过查看日志来诊断问题。
 
-## 📈 性能优化
+## 📊 性能优化
 
-### 服务器配置建议
-- 使用SSD存储提高IO性能
-- 配置足够的GPU显存
-- 确保网络带宽充足
+### 🚀 提升生成速度
+1. **多服务器部署**：配置多个 ComfyUI 服务器实现负载均衡
+2. **批量生成**：合理设置批量数，减少请求次数
+3. **分辨率优化**：根据需要选择合适的分辨率
 
-### 参数调优建议
-- 根据硬件性能调整批量大小
-- 合理设置队列大小避免内存溢出
-- 优化采样步数平衡质量和速度
+### 💾 存储优化
+1. **自动清理**：定期清理旧的生成图片
+2. **压缩设置**：调整图片质量和压缩比例
+3. **分布式存储**：将存储目录配置到高速磁盘
 
-## 🔐 安全说明
+## 🤝 贡献指南
 
-### 图片加密
-- 生成的图片默认经过希尔伯特曲线加密
-- 加密后的图片无法被直接识别
-- 用户需要使用专门的解密工具
-
-### 访问控制
-- 支持用户级别的下载限制
-- 可配置仅允许下载自己生成的图片
-- 提供详细的操作日志记录
+欢迎提交 Issue 和 Pull Request！
 
 
 
+## 📄 许可证
 
-### 问题反馈
-如遇到问题，请提供以下信息：
-- Astrbot版本
-- ComfyUI版本
-- 错误日志
-- 配置信息
-- 复现步骤
+
+
 
 ---
 
+<div align="center">
+
+
+
+[![Star](https://img.shields.io/github/stars/tjc6666666666666/astrbot_plugin_ComfyUI_promax.svg?style=social&label=Star)](https://github.com/tjc6666666666666/astrbot_plugin_ComfyUI_promax)
+[![Fork](https://img.shields.io/github/forks/tjc6666666666666/astrbot_plugin_ComfyUI_promax.svg?style=social&label=Fork)](https://github.com/tjc6666666666666/astrbot_plugin_ComfyUI_promax/fork)
+
+</div>
