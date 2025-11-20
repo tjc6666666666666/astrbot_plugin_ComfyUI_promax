@@ -120,7 +120,7 @@ class ModComfyUI(Star):
         self.parsed_time_ranges = self._parse_time_ranges()
         
         # HTML转图片配置
-        self.enable_help_image = config.get("enable_help_image", False)
+        self.enable_help_image = config.get("enable_help_image", True)
         self.help_server_port = config.get("help_server_port", 8080)
         self.help_server_thread: Optional[threading.Thread] = None
         self.help_server_runner: Optional[web.AppRunner] = None
@@ -448,6 +448,317 @@ class ModComfyUI(Star):
         workflow_help += "\n\nWorkflow使用说明：\n  - 格式：<前缀> [参数名:值 ...]\n  - 支持中英文参数名和别名（如：width/宽度/w，sampler_name/采样器/sampler）\n  - 参数格式：参数名:值（例：宽度:800 或 采样器:euler）\n  - 具体支持的参数名请查看各workflow的配置说明"
         
         return workflow_help
+
+    async def _send_workflow_help(self, event: AstrMessageEvent, prefix: str) -> None:
+        """发送特定workflow的详细帮助信息"""
+        try:
+            workflow_name = self.workflow_prefixes[prefix]
+            workflow_info = self.workflows[workflow_name]
+            config = workflow_info["config"]
+            
+            # 检查是否启用图片帮助
+            if self.enable_help_image:
+                # 尝试发送图片格式的帮助
+                success = await self._send_workflow_help_image(event, workflow_name, prefix, config)
+                if not success:
+                    # 图片生成失败，回退到文本格式
+                    logger.warning(f"生成workflow帮助图片失败，回退到文本格式: {workflow_name}")
+                    await self._send_workflow_help_text(event, prefix, config)
+            else:
+                # 发送文本格式的帮助
+                await self._send_workflow_help_text(event, prefix, config)
+            
+        except Exception as e:
+            logger.error(f"发送workflow帮助失败: {e}")
+            await event.send(event.plain_result(f"获取帮助信息失败: {str(e)}"))
+
+    async def _send_workflow_help_image(self, event: AstrMessageEvent, workflow_name: str, prefix: str, config: Dict[str, Any]) -> bool:
+        """发送图片格式的workflow帮助信息"""
+        try:
+            # 检查是否已有缓存的帮助图片
+            workflow_dir = os.path.join(self.workflow_dir, workflow_name)
+            help_image_path = os.path.join(workflow_dir, "help.png")
+            
+            if os.path.exists(help_image_path):
+                # 使用缓存的图片，传递文件路径
+                await event.send(event.image_result(help_image_path))
+                return True
+            
+            # 生成帮助图片
+            help_text = self._generate_workflow_help_text(prefix, config)
+            workflow_title = config.get("name", "工作流帮助")
+            image_data = self._create_help_image(help_text, workflow_title)
+            
+            if image_data:
+                # 保存图片到缓存
+                os.makedirs(workflow_dir, exist_ok=True)
+                with open(help_image_path, 'wb') as f:
+                    f.write(image_data)
+                
+                # 发送图片，传递文件路径
+                await event.send(event.image_result(help_image_path))
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"生成workflow帮助图片失败: {e}")
+            return False
+
+    async def _send_workflow_help_text(self, event: AstrMessageEvent, prefix: str, config: Dict[str, Any]) -> None:
+        """发送文本格式的workflow帮助信息"""
+        help_text = self._generate_workflow_help_text(prefix, config)
+        await event.send(event.plain_result(help_text))
+
+    def _generate_workflow_help_text(self, prefix: str, config: Dict[str, Any]) -> str:
+        """生成workflow帮助文本内容"""
+        help_lines = []
+        
+        # 标题和基本信息
+        help_lines.append(f"🔧 {config.get('name', 'Unknown')} 详细帮助")
+        help_lines.append("=" * 50)
+        help_lines.append(f"调用前缀: {prefix}")
+        help_lines.append(f"描述: {config.get('description', '暂无描述')}")
+        help_lines.append(f"版本: {config.get('version', '未知')}")
+        help_lines.append(f"作者: {config.get('author', '未知')}")
+        help_lines.append("")
+        
+        # 使用格式
+        help_lines.append("📝 使用格式:")
+        help_lines.append(f"  {prefix} [参数名:值 ...]")
+        
+        # 检查是否需要图片输入
+        input_nodes = config.get("input_nodes", [])
+        if input_nodes:
+            help_lines.append("  + 图片（必需）")
+        help_lines.append("")
+        
+        # 参数说明
+        node_configs = config.get("node_configs", {})
+        if node_configs:
+            help_lines.append("⚙️ 参数详细说明:")
+            help_lines.append("-" * 30)
+            
+            for node_id, node_config in node_configs.items():
+                for param_name, param_info in node_config.items():
+                    # 参数基本信息
+                    param_type = param_info.get("type", "未知")
+                    default_value = param_info.get("default", "无")
+                    description = param_info.get("description", "暂无描述")
+                    required = param_info.get("required", False)
+                    
+                    help_lines.append(f"🔸 {param_name}")
+                    help_lines.append(f"   类型: {param_type}")
+                    help_lines.append(f"   描述: {description}")
+                    help_lines.append(f"   必需: {'是' if required else '否'}")
+                    help_lines.append(f"   默认值: {default_value}")
+                    
+                    # 数值范围（如果有）
+                    if param_type == "number":
+                        min_val = param_info.get("min")
+                        max_val = param_info.get("max")
+                        if min_val is not None and max_val is not None:
+                            help_lines.append(f"   范围: {min_val} ~ {max_val}")
+                        elif min_val is not None:
+                            help_lines.append(f"   最小值: {min_val}")
+                        elif max_val is not None:
+                            help_lines.append(f"   最大值: {max_val}")
+                    
+                    # 选项（如果是select类型）
+                    if param_type == "select":
+                        options = param_info.get("options", [])
+                        if options:
+                            help_lines.append(f"   可选值: {', '.join(options)}")
+                    
+                    # 别名
+                    aliases = param_info.get("aliases", [])
+                    if aliases:
+                        help_lines.append(f"   别名: {', '.join(aliases)}")
+                    
+                    help_lines.append("")
+        
+        # 使用示例
+        help_lines.append("💡 使用示例:")
+        examples = self._generate_workflow_examples(prefix, config)
+        for example in examples:
+            help_lines.append(f"  {example}")
+        help_lines.append("")
+        
+        # 注意事项
+        help_lines.append("⚠️ 注意事项:")
+        help_lines.append("  • 参数格式为: 参数名:值")
+        help_lines.append("  • 支持中英文参数名和别名")
+        help_lines.append("  • 多个参数用空格分隔")
+        help_lines.append("  • 如需图片，请同时发送图片或引用图片消息")
+        help_lines.append("")
+        
+        return "\n".join(help_lines)
+
+    def _create_help_image(self, text: str, title: str = "工作流帮助") -> Optional[bytes]:
+        """创建帮助图片，使用与主帮助图片相同的页眉页尾样式"""
+        try:
+            # 图片设置
+            width = 1200
+            padding = 50
+            line_height = 35
+            font_size_title = 52
+            font_size_normal = 32
+            font_size_small = 24
+            base_height = 120  # 顶部标题区域
+            bottom_height = 80  # 底部信息区域
+            
+            # 尝试加载字体
+            try:
+                font_path = os.path.join(os.path.dirname(__file__), "1.ttf")
+                if os.path.exists(font_path):
+                    title_font = ImageFont.truetype(font_path, font_size_title)
+                    normal_font = ImageFont.truetype(font_path, font_size_normal)
+                    small_font = ImageFont.truetype(font_path, font_size_small)
+                else:
+                    title_font = ImageFont.load_default()
+                    normal_font = ImageFont.load_default()
+                    small_font = ImageFont.load_default()
+            except:
+                title_font = ImageFont.load_default()
+                normal_font = ImageFont.load_default()
+                small_font = ImageFont.load_default()
+            
+            # 计算所需高度
+            lines = text.split('\n')
+            content_height = len(lines) * line_height + 50  # 额外50像素用于间距
+            height = max(800, base_height + content_height + bottom_height)
+            
+            # 创建图片
+            img = PILImage.new('RGB', (width, height), color='#ffffff')
+            draw = ImageDraw.Draw(img)
+            
+            # 绘制页眉背景（与主帮助图片相同的样式）
+            draw.rectangle([0, 0, width, 80], fill='#4a90e2')
+            
+            # 绘制页眉标题
+            title_text = f"🎨 ComfyUI AI绘画 - {title}"
+            title_bbox = draw.textbbox((0, 0), title_text, font=title_font)
+            title_width = title_bbox[2] - title_bbox[0]
+            title_x = (width - title_width) // 2
+            draw.text((title_x, 25), title_text, fill='white', font=title_font)
+            
+            # 绘制内容区域
+            y_offset = base_height
+            
+            for line in lines:
+                if line.startswith('🔧'):
+                    # 标题行
+                    draw.text((padding, y_offset), line, fill='#333333', font=normal_font)
+                elif line.startswith('='):
+                    # 分隔线
+                    draw.text((padding, y_offset), line, fill='#34495e', font=normal_font)
+                elif line.startswith('📝'):
+                    # 章节标题
+                    draw.text((padding, y_offset), line, fill='#2980b9', font=normal_font)
+                elif line.startswith('⚙️') or line.startswith('💡') or line.startswith('⚠️'):
+                    # 章节标题
+                    draw.text((padding, y_offset), line, fill='#27ae60', font=normal_font)
+                elif line.startswith('🔸'):
+                    # 参数名
+                    draw.text((padding, y_offset), line, fill='#8e44ad', font=small_font)
+                elif line.startswith('   '):
+                    # 参数说明
+                    draw.text((padding, y_offset), line, fill='#34495e', font=small_font)
+                elif line.startswith('  '):
+                    # 示例
+                    draw.text((padding, y_offset), line, fill='#16a085', font=small_font)
+                else:
+                    # 普通文本
+                    draw.text((padding, y_offset), line, fill='#666666', font=small_font)
+                
+                y_offset += line_height
+            
+            # 绘制页脚背景（与主帮助图片相同的样式）
+            draw.rectangle([0, height-80, width, height], fill='#f5f5f5')
+            
+            # 绘制页脚信息
+            footer_text = f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            draw.text((50, height-60), footer_text, fill='#999999', font=small_font)
+            
+            # 在左下角添加GitHub链接
+            github_text = "https://github.com/tjc6666666666666/astrbot_plugin_ComfyUI_promax"
+            draw.text((50, height-35), github_text, fill='#666666', font=small_font)
+            
+            # 在右下角添加Astrbot.png图片（与主帮助图片相同的样式）
+            try:
+                astrbot_path = os.path.join(os.path.dirname(__file__), "Astrbot.png")
+                if os.path.exists(astrbot_path):
+                    astrbot_img = PILImage.open(astrbot_path)
+                    
+                    # 调整图片大小
+                    target_height = 60
+                    aspect_ratio = astrbot_img.width / astrbot_img.height
+                    target_width = int(target_height * aspect_ratio)
+                    
+                    astrbot_resized = astrbot_img.resize((target_width, target_height), PILImage.Resampling.LANCZOS)
+                    
+                    # 计算右下角位置
+                    x_position = width - target_width - 10
+                    y_position = height - target_height - 10
+                    
+                    # 粘贴图片
+                    img.paste(astrbot_resized, (x_position, y_position), astrbot_resized if astrbot_resized.mode == 'RGBA' else None)
+                    
+                    logger.info(f"已将Astrbot.png添加到工作流帮助图片右下角，位置: ({x_position}, {y_position})")
+                else:
+                    logger.warning(f"Astrbot.png文件不存在: {astrbot_path}")
+            except Exception as e:
+                logger.error(f"添加Astrbot.png到工作流帮助图片失败: {e}")
+            
+            # 转换为bytes
+            img_buffer = io.BytesIO()
+            img.save(img_buffer, format='PNG', quality=95)
+            img_buffer.seek(0)
+            
+            return img_buffer.getvalue()
+            
+        except Exception as e:
+            logger.error(f"创建工作流帮助图片失败: {e}")
+            return None
+
+    def _generate_workflow_examples(self, prefix: str, config: Dict[str, Any]) -> List[str]:
+        """生成workflow使用示例"""
+        examples = []
+        node_configs = config.get("node_configs", {})
+        
+        # 收集常用参数
+        common_params = {}
+        for node_id, node_config in node_configs.items():
+            for param_name, param_info in node_config.items():
+                if param_info.get("default") is not None:
+                    common_params[param_name] = param_info["default"]
+        
+        # 基础示例（使用默认值）
+        if common_params:
+            example_parts = [prefix]
+            # 选择几个常用参数作为示例
+            sample_params = []
+            for param_name, default_value in list(common_params.items())[:3]:
+                sample_params.append(f"{param_name}:{default_value}")
+            if sample_params:
+                example_parts.extend(sample_params)
+                examples.append(" ".join(example_parts))
+        
+        # 简单示例（仅前缀）
+        examples.append(prefix)
+        
+        # 如果有提示词参数，添加提示词示例
+        has_prompt = False
+        for node_id, node_config in node_configs.items():
+            for param_name, param_info in node_config.items():
+                if "提示" in param_name or "prompt" in param_name.lower():
+                    examples.append(f"{prefix} {param_name}:可爱女孩")
+                    has_prompt = True
+                    break
+            if has_prompt:
+                break
+        
+        return examples
 
     def _validate_config(self) -> None:
         if not self.comfyui_servers:
@@ -2728,6 +3039,31 @@ class ModComfyUI(Star):
             
             prefix = words[0]
             
+            # 检查是否是workflow help命令格式：前缀 help
+            if len(words) >= 2 and words[1].lower() == "help":
+                # 检查前缀是否是有效的workflow前缀
+                workflow_dir = os.path.join(os.path.dirname(__file__), "workflow")
+                if not os.path.exists(workflow_dir):
+                    return False
+                
+                for workflow_name in os.listdir(workflow_dir):
+                    workflow_path = os.path.join(workflow_dir, workflow_name)
+                    if not os.path.isdir(workflow_path):
+                        continue
+                    
+                    config_file = os.path.join(workflow_path, "config.json")
+                    if not os.path.exists(config_file):
+                        continue
+                    
+                    try:
+                        with open(config_file, 'r', encoding='utf-8') as f:
+                            config = json.load(f)
+                        
+                        if config.get("prefix") == prefix:
+                            return True
+                    except Exception:
+                        continue
+            
             # 直接从workflow目录检查前缀是否存在
             workflow_dir = os.path.join(os.path.dirname(__file__), "workflow")
             if not os.path.exists(workflow_dir):
@@ -2767,6 +3103,11 @@ class ModComfyUI(Star):
                 await event.send(event.plain_result(f"未知的workflow前缀: {prefix}"))
                 return
 
+            # 检查是否是help命令
+            if len(words) >= 2 and words[1].lower() == "help":
+                await self._send_workflow_help(event, prefix)
+                return
+
             workflow_name = self.workflow_prefixes[prefix]
             workflow_info = self.workflows[workflow_name]
             config = workflow_info["config"]
@@ -2790,6 +3131,13 @@ class ModComfyUI(Star):
             # 解析参数
             args = words[1:] if len(words) > 1 else []
             params = self._parse_workflow_params(args, config)
+
+            # 验证必需的参数
+            missing_params = self._validate_required_params(config, params)
+            if missing_params:
+                param_list = ", ".join(missing_params)
+                await event.send(event.plain_result(f"缺少必需的参数：{param_list}"))
+                return
 
             # 获取图片输入（如果需要）
             images = []
@@ -2891,6 +3239,45 @@ class ModComfyUI(Star):
         
         return params
 
+    def _validate_required_params(self, config: Dict[str, Any], params: Dict[str, Any]) -> List[str]:
+        """验证必需的参数是否都已提供"""
+        missing_params = []
+        node_configs = config.get("node_configs", {})
+        
+        # 构建参数名映射表（包括别名）
+        param_mapping = {}
+        for node_id, node_config in node_configs.items():
+            for param_name, param_info in node_config.items():
+                # 主参数名
+                param_mapping[param_name] = param_name
+                
+                # 添加别名
+                aliases = param_info.get("aliases", [])
+                for alias in aliases:
+                    param_mapping[alias] = param_name
+        
+        # 检查每个必需参数
+        for node_id, node_config in node_configs.items():
+            for param_name, param_info in node_config.items():
+                if param_info.get("required", False):
+                    # 检查参数是否已提供（包括通过别名提供的）
+                    param_provided = False
+                    for provided_key in params.keys():
+                        if param_mapping.get(provided_key) == param_name:
+                            param_provided = True
+                            break
+                    
+                    if not param_provided:
+                        # 获取参数的显示名称（优先使用第一个别名，如果没有别名则使用主参数名）
+                        display_name = param_name
+                        aliases = param_info.get("aliases", [])
+                        if aliases:
+                            display_name = aliases[0]  # 使用第一个别名作为显示名称
+                        
+                        missing_params.append(display_name)
+        
+        return missing_params
+
     def _build_workflow(self, workflow_data: Dict[str, Any], config: Dict[str, Any], 
                        params: Dict[str, Any], images: List[str]) -> Dict[str, Any]:
         """构建最终的workflow"""
@@ -2923,6 +3310,9 @@ class ModComfyUI(Star):
                                 value = float(value)
                                 if value.is_integer():
                                     value = int(value)
+                                # 特殊处理seed参数：如果值为-1，则生成随机种子
+                                if param_name == "seed" and value == -1:
+                                    value = random.randint(1, 18446744073709551615)
                             except ValueError:
                                 value = param_config.get("default", 0)
                         elif param_type == "boolean":
@@ -2934,7 +3324,11 @@ class ModComfyUI(Star):
                         
                         final_workflow[node_id]["inputs"][param_name] = value
                     elif "default" in param_config:
-                        final_workflow[node_id]["inputs"][param_name] = param_config["default"]
+                        value = param_config["default"]
+                        # 特殊处理seed参数：如果默认值为-1，则生成随机种子
+                        if param_name == "seed" and value == -1:
+                            value = random.randint(1, 18446744073709551615)
+                        final_workflow[node_id]["inputs"][param_name] = value
         
         # 设置全局模型配置（跟随主配置）
         if "30" in final_workflow and final_workflow["30"]["class_type"] == "CheckpointLoaderSimple":
@@ -2942,4 +3336,3 @@ class ModComfyUI(Star):
                 final_workflow["30"]["inputs"]["ckpt_name"] = self.ckpt_name
         
         return final_workflow
-
