@@ -29,8 +29,8 @@ import base64
 @register(
     "mod-comfyui",
     "",
-    "使用多服务器ComfyUI文生图/图生图（支持模型选择、LoRA和服务器轮询）。\n开放时间：{open_time_ranges}\n文生图：发送「aimg <提示词> [宽X,高Y] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]」参数可选，非必填（例：/aimg girl 宽512,高768 批量2 model:写实风格 lora:儿童:0.8 lora:可爱!1.0）\n图生图：发送「img2img <提示词> [噪声:数值] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]」+ 图片或引用包含图片的消息（例：img2img 猫咪 噪声:0.7 批量2 model:动漫风格 lora:动物:1.2!0.9 + 图片/引用图片消息）\n输出压缩包：发送「comfyuioutput」获取今天生成的图片压缩包（需开启自动保存）\n模型使用说明：\n  - 格式：model:描述（描述对应配置中的模型描述）\n  - 例：model:写实风格\nLoRA使用说明：\n  - 基础格式：lora:描述（使用默认强度1.0/1.0，描述对应配置中的LoRA描述）\n  - 仅模型强度：lora:描述:0.8（strength_model=0.8）\n  - 仅CLIP强度：lora:描述!1.0（strength_clip=1.0）\n  - 双强度：lora:描述:0.8!1.3（model=0.8, clip=1.3）\n  - 多LoRA：空格分隔多个lora参数（例：lora:儿童 lora:学生:0.9）\n多服务器轮询处理，所有生成图片将合并为一条消息发送，未指定参数则用默认配置（文生图默认批量数：{txt2img_batch_size}，图生图默认批量数：{img2img_batch_size}，默认噪声系数：{default_denoise}，默认模型：{ckpt_name}）。\n限制说明：文生图最大批量{max_txt2img_batch}，图生图最大批量{max_img2img_batch}，分辨率范围{min_width}~{max_width}x{min_height}~{max_height}，任务队列最大{max_task_queue}个，每用户最大并发{max_concurrent_tasks_per_user}个\n可用模型列表：\n{model_list_desc}\n可用LoRA列表：\n{lora_list_desc}",
-    "3.2"  # 版本更新：支持图片压缩包输出功能
+    "使用多服务器ComfyUI文生图/图生图（支持模型选择、LoRA、自定义Workflow和服务器轮询）。\n开放时间：{open_time_ranges}\n文生图：发送「aimg <提示词> [宽X,高Y] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]」参数可选，非必填（例：/aimg girl 宽512,高768 批量2 model:写实风格 lora:儿童:0.8 lora:可爱!1.0）\n图生图：发送「img2img <提示词> [噪声:数值] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]」+ 图片或引用包含图片的消息（例：img2img 猫咪 噪声:0.7 批量2 model:动漫风格 lora:动物:1.2!0.9 + 图片/引用图片消息）\n自定义Workflow：发送「<前缀> [参数名:值 ...]」+ 图片（如需要），支持中英文参数名（例：encrypt 模式:decrypt 或 t2l 提示词:可爱女孩 种子:123 采样器:euler）\n输出压缩包：发送「comfyuioutput」获取今天生成的图片压缩包（需开启自动保存）\n模型使用说明：\n  - 格式：model:描述（描述对应配置中的模型描述）\n  - 例：model:写实风格\nLoRA使用说明：\n  - 基础格式：lora:描述（使用默认强度1.0/1.0，描述对应配置中的LoRA描述）\n  - 仅模型强度：lora:描述:0.8（strength_model=0.8）\n  - 仅CLIP强度：lora:描述!1.0（strength_clip=1.0）\n  - 双强度：lora:描述:0.8!1.3（model=0.8, clip=1.3）\n  - 多LoRA：空格分隔多个lora参数（例：lora:儿童 lora:学生:0.9）\nWorkflow参数说明：\n  - 支持中英文参数名和别名（如：width/宽度/w，sampler_name/采样器/sampler）\n  - 参数格式：参数名:值（例：宽度:800 或 采样器:euler）\n  - 具体支持的参数名请查看各workflow的配置说明\n多服务器轮询处理，所有生成图片将合并为一条消息发送，未指定参数则用默认配置（文生图默认批量数：{txt2img_batch_size}，图生图默认批量数：{img2img_batch_size}，默认噪声系数：{default_denoise}，默认模型：{ckpt_name}）。\n限制说明：文生图最大批量{max_txt2img_batch}，图生图最大批量{max_img2img_batch}，分辨率范围{min_width}~{max_width}x{min_height}~{max_height}，任务队列最大{max_task_queue}个，每用户最大并发{max_concurrent_tasks_per_user}个\n可用模型列表：\n{model_list_desc}\n可用LoRA列表：\n{lora_list_desc}\n可用Workflow列表：\n{workflow_list_desc}",
+    "3.3"  # 版本更新：支持自定义Workflow模块功能
 )
 class ModComfyUI(Star):
     # 服务器状态类（增加worker引用）
@@ -142,6 +142,13 @@ class ModComfyUI(Star):
 
         # 用户队列限制配置
         self.max_concurrent_tasks_per_user = config.get("max_concurrent_tasks_per_user", 3)
+
+        # Workflow模块配置
+        self.workflow_dir = os.path.join(os.path.dirname(__file__), "workflow")
+        self.workflows: Dict[str, Dict[str, Any]] = {}
+        self.workflow_prefixes: Dict[str, str] = {}  # prefix -> workflow_name
+        self._load_workflows()
+        self.workflow_list_desc = self._generate_workflow_list_desc()
 
         # 2. 状态管理
         self.task_queue: asyncio.Queue = asyncio.Queue(maxsize=self.max_task_queue)
@@ -387,6 +394,60 @@ class ModComfyUI(Star):
                 desc_list.append(f"  - {desc}（文件：{filename}）")
         
         return "\n".join(desc_list)
+
+    def _generate_workflow_list_desc(self) -> str:
+        """生成workflow列表描述"""
+        if not self.workflows:
+            return "  暂无可用Workflow"
+        
+        desc_list = []
+        for workflow_name, workflow_info in self.workflows.items():
+            config = workflow_info["config"]
+            name = config.get("name", workflow_name)
+            prefix = config.get("prefix", "")
+            description = config.get("description", "")
+            desc_list.append(f"  - {name}（前缀：{prefix}）{f' - {description}' if description else ''}")
+        
+        return "\n".join(desc_list)
+
+    def _generate_workflow_html_items(self) -> str:
+        """生成HTML格式的workflow列表"""
+        if not self.workflows:
+            return '<li>暂无可用Workflow</li>'
+        
+        html_items = []
+        for workflow_name, workflow_info in self.workflows.items():
+            config = workflow_info["config"]
+            name = config.get("name", workflow_name)
+            prefix = config.get("prefix", "")
+            description = config.get("description", "")
+            if description:
+                html_items.append(f'<li>{name} (前缀: {prefix}) - {description}</li>')
+            else:
+                html_items.append(f'<li>{name} (前缀: {prefix})</li>')
+        
+        return "\n".join(html_items)
+
+    def _generate_workflow_text_help(self) -> str:
+        """生成文本格式的workflow帮助信息"""
+        if not self.workflows:
+            return "\n\n🔧 可用Workflow列表：\n  • 暂无可用Workflow"
+        
+        workflow_details = []
+        for workflow_name, workflow_info in self.workflows.items():
+            config = workflow_info["config"]
+            name = config.get("name", workflow_name)
+            prefix = config.get("prefix", "")
+            description = config.get("description", "")
+            if description:
+                workflow_details.append(f"  • {name} (前缀: {prefix}) - {description}")
+            else:
+                workflow_details.append(f"  • {name} (前缀: {prefix})")
+        
+        workflow_help = f"\n\n🔧 可用Workflow列表：\n" + "\n".join(workflow_details)
+        workflow_help += "\n\nWorkflow使用说明：\n  - 格式：<前缀> [参数名:值 ...]\n  - 支持中英文参数名和别名（如：width/宽度/w，sampler_name/采样器/sampler）\n  - 参数格式：参数名:值（例：宽度:800 或 采样器:euler）\n  - 具体支持的参数名请查看各workflow的配置说明"
+        
+        return workflow_help
 
     def _validate_config(self) -> None:
         if not self.comfyui_servers:
@@ -955,6 +1016,7 @@ class ModComfyUI(Star):
         retry_count = 0
         last_error = None
         user_id = task_data.get("user_id")  # 获取用户ID
+        is_workflow = task_data.get("is_workflow", False)
         
         try:
             while retry_count <= max_retries:
@@ -964,7 +1026,12 @@ class ModComfyUI(Star):
                         raise Exception(f"服务器{server.name}已不健康，无法处理任务")
                         
                     # 处理任务
-                    await self._process_comfyui_task(server, **task_data)
+                    if is_workflow:
+                        # 过滤掉 is_workflow 参数，避免传递给 _process_workflow_task
+                        workflow_task_data = {k: v for k, v in task_data.items() if k != 'is_workflow'}
+                        await self._process_workflow_task(server, **workflow_task_data)
+                    else:
+                        await self._process_comfyui_task(server, **task_data)
                     self._reset_server_failure(server)
                     return
                 except Exception as e:
@@ -1066,6 +1133,67 @@ class ModComfyUI(Star):
         # 添加图片
         for idx, img_url in image_urls:
             merged_chain.append(Plain(f"\n\n第{idx}/{current_batch_size}张："))
+            merged_chain.append(Image.fromURL(img_url))
+        
+        # 一次性发送合并的消息
+        await event.send(event.chain_result(merged_chain))
+
+    async def _process_workflow_task(
+        self,
+        server: ServerState,
+        event: AstrMessageEvent,
+        prompt: Dict[str, Any],
+        workflow_name: str,
+        user_id: Optional[str] = None
+    ) -> None:
+        """处理workflow任务"""
+        workflow_info = self.workflows[workflow_name]
+        config = workflow_info["config"]
+        
+        # 发送workflow到ComfyUI
+        prompt_id = await self._send_comfyui_prompt(server, prompt)
+        
+        await event.send(event.plain_result(
+            f"\nWorkflow任务「{config['name']}」已下发至服务器【{server.name}】：\n任务ID：{prompt_id[:8]}..."
+        ))
+        
+        # 轮询任务状态
+        history_data = await self._poll_task_status(server, prompt_id)
+        if not history_data or history_data.get("status", {}).get("completed") is False:
+            raise Exception("任务超时或未完成（超时10分钟）")
+        
+        # 提取输出图片
+        output_nodes = config.get("output_nodes", [])
+        output_mappings = config.get("output_mappings", {})
+        image_urls = []
+        
+        for node_id in output_nodes:
+            if node_id in output_mappings:
+                outputs = history_data.get("outputs", {})
+                node_output = outputs.get(node_id)
+                if node_output and node_output.get("images"):
+                    for idx, image_info in enumerate(node_output["images"]):
+                        image_url = await self._get_image_url(server, image_info["filename"])
+                        image_urls.append((len(image_urls) + 1, image_url))
+                        
+                        # 静悄悄保存图片
+                        await self._save_image_locally(server, image_info["filename"], f"workflow_{workflow_name}", user_id or "")
+        
+        if not image_urls:
+            # 检查是否有其他类型的输出
+            await event.send(event.plain_result(f"Workflow「{config['name']}」执行完成，但未检测到图片输出"))
+            return
+        
+        # 构建结果消息
+        result_text = f"Workflow「{config['name']}」执行完成！\n共{len(image_urls)}张图片："
+        
+        # 构建合并的消息链
+        merged_chain = []
+        merged_chain.append(Plain(result_text))
+        
+        # 添加图片
+        for idx, img_url in image_urls:
+            merged_chain.append(Plain(f"\n\n第{idx}/{len(image_urls)}张："))
             merged_chain.append(Image.fromURL(img_url))
         
         # 一次性发送合并的消息
@@ -1559,6 +1687,16 @@ class ModComfyUI(Star):
                     {server_items_html}
                 </ul>
             </div>
+            
+            <div class="section">
+                <h2>🔧 可用Workflow列表</h2>
+                <div class="highlight">
+                    <strong>使用格式:</strong> &lt;前缀&gt; [参数名:值 ...]
+                </div>
+                <ul>
+                    {self._generate_workflow_html_items()}
+                </ul>
+            </div>
         </div>
         <div class="footer">
             <p>生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
@@ -1729,6 +1867,22 @@ class ModComfyUI(Star):
             
             # server_items.append(f"帮助服务器: {html_url}")  # 隐藏服务器地址避免暴露
             sections.append(("🌐 服务器信息", server_items))
+            
+            # Workflow使用 - 显示所有可用Workflow
+            workflow_items = ["格式: <前缀> [参数名:值 ...]"]
+            if self.workflows:
+                for workflow_name, workflow_info in self.workflows.items():
+                    config = workflow_info["config"]
+                    name = config.get("name", workflow_name)
+                    prefix = config.get("prefix", "")
+                    description = config.get("description", "")
+                    if description:
+                        workflow_items.append(f"• {name} (前缀: {prefix}) - {description}")
+                    else:
+                        workflow_items.append(f"• {name} (前缀: {prefix})")
+            else:
+                workflow_items.append("• 暂无可用Workflow")
+            sections.append(("🔧 可用Workflow列表", workflow_items))
             
             # 计算实际需要的图片高度
             base_height = 120  # 顶部标题区域
@@ -2009,6 +2163,9 @@ class ModComfyUI(Star):
 
 • 输出压缩包：发送「comfyuioutput」获取今天生成的图片压缩包（需开启自动保存）
 
+• 自定义Workflow：发送「<前缀> [参数名:值 ...]」+ 图片（如需要），支持中英文参数名
+  例：encrypt 模式:decrypt 或 t2l 提示词:可爱女孩 种子:123 采样器:euler
+
 • 帮助信息：单独输入 aimg 或 img2img
 
 ⚙️ 默认配置：
@@ -2031,6 +2188,7 @@ class ModComfyUI(Star):
 {server_info}
 {model_help}
 {lora_help}
+{self._generate_workflow_text_help()}
         """
         
         await event.send(event.plain_result(help_text.strip()))
@@ -2437,4 +2595,351 @@ class ModComfyUI(Star):
             + lora_feedback
         ))
 
+    def _load_workflows(self) -> None:
+        """加载workflow模块"""
+        try:
+            if not os.path.exists(self.workflow_dir):
+                os.makedirs(self.workflow_dir, exist_ok=True)
+                logger.info(f"创建workflow目录: {self.workflow_dir}")
+                return
+
+            for workflow_name in os.listdir(self.workflow_dir):
+                workflow_path = os.path.join(self.workflow_dir, workflow_name)
+                if not os.path.isdir(workflow_path):
+                    continue
+
+                config_file = os.path.join(workflow_path, "config.json")
+                workflow_file = os.path.join(workflow_path, "workflow.json")
+
+                if not os.path.exists(config_file) or not os.path.exists(workflow_file):
+                    logger.warning(f"workflow {workflow_name} 缺少必要文件，跳过")
+                    continue
+
+                try:
+                    with open(config_file, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                    
+                    with open(workflow_file, 'r', encoding='utf-8') as f:
+                        workflow_data = json.load(f)
+
+                    # 验证配置格式
+                    required_fields = ["name", "prefix", "input_nodes", "output_nodes"]
+                    for field in required_fields:
+                        if field not in config:
+                            logger.error(f"workflow {workflow_name} 配置缺少必要字段: {field}")
+                            continue
+
+                    prefix = config["prefix"]
+                    if prefix in self.workflow_prefixes:
+                        logger.warning(f"workflow前缀重复: {prefix}，跳过 {workflow_name}")
+                        continue
+
+                    # 注入主程序配置到workflow
+                    self._inject_main_config(config, workflow_name)
+
+                    # 存储workflow信息
+                    self.workflows[workflow_name] = {
+                        "config": config,
+                        "workflow": workflow_data,
+                        "path": workflow_path
+                    }
+                    self.workflow_prefixes[prefix] = workflow_name
+
+                    logger.info(f"已加载workflow: {config['name']} (前缀: {prefix})")
+
+                except Exception as e:
+                    logger.error(f"加载workflow {workflow_name} 失败: {e}")
+
+            logger.info(f"共加载 {len(self.workflows)} 个workflow模块")
+
+        except Exception as e:
+            logger.error(f"加载workflow模块失败: {e}")
+
+    def _inject_main_config(self, config: Dict[str, Any], workflow_name: str) -> None:
+        """将主程序的model和lora配置注入到workflow配置中"""
+        try:
+            if "node_configs" not in config:
+                return
+
+            node_configs = config["node_configs"]
+            
+            # 遍历所有节点配置
+            for node_id, node_config in node_configs.items():
+                for param_name, param_info in node_config.items():
+                    # 检查是否需要注入模型配置
+                    if param_info.get("type") == "select" and param_info.get("inject_models"):
+                        # 注入模型选项
+                        model_options = []
+                        if self.model_name_map:
+                            for desc_lower, (filename, desc) in self.model_name_map.items():
+                                if desc_lower == desc.lower():  # 只添加原始描述，避免重复
+                                    model_options.append(desc)
+                        
+                        if model_options:
+                            param_info["options"] = model_options
+                            param_info.pop("inject_models", None)  # 移除注入标记
+                            logger.debug(f"为workflow {workflow_name} 节点 {node_id} 参数 {param_name} 注入了 {len(model_options)} 个模型选项")
+
+                    # 检查是否需要注入LoRA配置
+                    elif param_info.get("type") == "text" and param_info.get("inject_loras"):
+                        # 为LoRA参数添加描述信息
+                        if self.lora_name_map:
+                            lora_descriptions = []
+                            for desc_lower, (filename, desc) in self.lora_name_map.items():
+                                if desc_lower == desc.lower():  # 只添加原始描述，避免重复
+                                    lora_descriptions.append(f"{desc} (文件: {filename})")
+                            
+                            if lora_descriptions:
+                                param_info["description"] = param_info.get("description", "") + f"\n可用LoRA: {', '.join(lora_descriptions[:5])}"
+                                if len(lora_descriptions) > 5:
+                                    param_info["description"] += f" (共{len(lora_descriptions)}个)"
+                                param_info.pop("inject_loras", None)  # 移除注入标记
+                                logger.debug(f"为workflow {workflow_name} 节点 {node_id} 参数 {param_name} 注入了LoRA描述信息")
+
+                    # 检查是否需要注入采样器配置
+                    elif param_info.get("type") == "select" and param_info.get("inject_samplers"):
+                        # 使用主程序的默认采样器
+                        if self.sampler_name:
+                            param_info["default"] = self.sampler_name
+                        param_info.pop("inject_samplers", None)  # 移除注入标记
+                        logger.debug(f"为workflow {workflow_name} 节点 {node_id} 参数 {param_name} 设置了默认采样器: {self.sampler_name}")
+
+                    # 检查是否需要注入调度器配置
+                    elif param_info.get("type") == "select" and param_info.get("inject_schedulers"):
+                        # 使用主程序的默认调度器
+                        if self.scheduler:
+                            param_info["default"] = self.scheduler
+                        param_info.pop("inject_schedulers", None)  # 移除注入标记
+                        logger.debug(f"为workflow {workflow_name} 节点 {node_id} 参数 {param_name} 设置了默认调度器: {self.scheduler}")
+
+        except Exception as e:
+            logger.error(f"为workflow {workflow_name} 注入主程序配置失败: {e}")
+
+    class WorkflowFilter(CustomFilter):
+        def filter(self, event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
+            full_text = event.message_obj.message_str.strip()
+            if not full_text:
+                return False
+            
+            # 检查是否匹配任何workflow前缀
+            words = full_text.split()
+            if not words:
+                return False
+            
+            prefix = words[0]
+            
+            # 直接从workflow目录检查前缀是否存在
+            workflow_dir = os.path.join(os.path.dirname(__file__), "workflow")
+            if not os.path.exists(workflow_dir):
+                return False
+            
+            for workflow_name in os.listdir(workflow_dir):
+                workflow_path = os.path.join(workflow_dir, workflow_name)
+                if not os.path.isdir(workflow_path):
+                    continue
+                
+                config_file = os.path.join(workflow_path, "config.json")
+                if not os.path.exists(config_file):
+                    continue
+                
+                try:
+                    with open(config_file, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                    
+                    if config.get("prefix") == prefix:
+                        return True
+                except Exception:
+                    continue
+            
+            return False
+
+    @filter.custom_filter(WorkflowFilter)
+    async def handle_workflow(self, event: AstrMessageEvent):
+        """处理workflow命令"""
+        try:
+            full_text = event.message_obj.message_str.strip()
+            words = full_text.split()
+            if not words:
+                return
+
+            prefix = words[0]
+            if prefix not in self.workflow_prefixes:
+                await event.send(event.plain_result(f"未知的workflow前缀: {prefix}"))
+                return
+
+            workflow_name = self.workflow_prefixes[prefix]
+            workflow_info = self.workflows[workflow_name]
+            config = workflow_info["config"]
+            workflow_data = workflow_info["workflow"]
+
+            # 检查开放时间
+            if not self._is_in_open_time():
+                await event.send(event.plain_result(
+                    f"当前不在开放时间内，开放时间：{self.open_time_ranges}"
+                ))
+                return
+
+            # 检查用户并发限制
+            user_id = str(event.get_sender_id())
+            if not await self._check_user_task_limit(user_id):
+                await event.send(event.plain_result(
+                    f"您当前有过多任务在执行中（最大{self.max_concurrent_tasks_per_user}个），请稍后再试"
+                ))
+                return
+
+            # 解析参数
+            args = words[1:] if len(words) > 1 else []
+            params = self._parse_workflow_params(args, config)
+
+            # 获取图片输入（如果需要）
+            images = []
+            messages = event.get_messages()
+            has_image = any(isinstance(msg, Image) for msg in messages)
+            
+            # 检查回复中的图片
+            has_image_in_reply = False
+            reply_seg = next((seg for seg in messages if isinstance(seg, Reply)), None)
+            if reply_seg and reply_seg.chain:
+                has_image_in_reply = any(isinstance(seg, Image) for seg in reply_seg.chain)
+
+            # 处理图片输入
+            if config.get("input_nodes"):
+                if not has_image and not has_image_in_reply:
+                    await event.send(event.plain_result("此workflow需要图片输入，请发送图片或引用包含图片的消息"))
+                    return
+                
+                # 获取图片
+                if has_image:
+                    image_seg = next(msg for msg in messages if isinstance(msg, Image))
+                else:
+                    # 从回复中获取图片
+                    image_seg = next(seg for seg in reply_seg.chain if isinstance(seg, Image))
+                
+                # 上传图片到ComfyUI服务器
+                try:
+                    # 选择可用的服务器
+                    upload_server = self._get_next_available_server() or self._get_any_healthy_server()
+                    if not upload_server:
+                        await event.send(event.plain_result("当前没有可用的ComfyUI服务器"))
+                        return
+                    
+                    # 将图片转换为文件路径
+                    img_path = await image_seg.convert_to_file_path()
+                    image_filename = await self._upload_image_to_comfyui(upload_server, img_path)
+                except Exception as e:
+                    await event.send(event.plain_result(f"图片上传失败：{str(e)[:100]}"))
+                    return
+                if not image_filename:
+                    await event.send(event.plain_result("图片上传失败"))
+                    return
+                images.append(image_filename)
+
+            # 构建workflow
+            final_workflow = self._build_workflow(workflow_data, config, params, images)
+
+            # 增加用户任务计数
+            await self._increment_user_task_count(user_id)
+
+            # 添加到任务队列
+            if self.task_queue.full():
+                await self._decrement_user_task_count(user_id)
+                await event.send(event.plain_result(f"当前任务队列已满（{self.max_task_queue}个任务上限），请稍后再试！"))
+                return
+
+            await self.task_queue.put({
+                "event": event,
+                "prompt": final_workflow,
+                "workflow_name": workflow_name,
+                "user_id": user_id,
+                "is_workflow": True
+            })
+
+            await event.send(event.plain_result(
+                f"Workflow任务「{config['name']}」已加入队列（当前排队：{self.task_queue.qsize()}个）"
+            ))
+
+        except Exception as e:
+            logger.error(f"处理workflow命令失败: {e}")
+            await event.send(event.plain_result(f"处理workflow命令失败: {str(e)}"))
+
+    def _parse_workflow_params(self, args: List[str], config: Dict[str, Any]) -> Dict[str, Any]:
+        """解析workflow参数，支持自定义键名"""
+        params = {}
+        node_configs = config.get("node_configs", {})
+        
+        # 构建参数名映射表（包括别名）
+        param_mapping = {}
+        for node_id, node_config in node_configs.items():
+            for param_name, param_info in node_config.items():
+                # 主参数名
+                param_mapping[param_name] = param_name
+                
+                # 添加别名
+                aliases = param_info.get("aliases", [])
+                for alias in aliases:
+                    param_mapping[alias] = param_name
+        
+        # 解析参数，格式为 参数名:值
+        for arg in args:
+            if ":" not in arg:
+                continue
+            key, value = arg.split(":", 1)
+            
+            # 查找实际参数名（支持别名）
+            actual_key = param_mapping.get(key, key)
+            params[actual_key] = value
+        
+        return params
+
+    def _build_workflow(self, workflow_data: Dict[str, Any], config: Dict[str, Any], 
+                       params: Dict[str, Any], images: List[str]) -> Dict[str, Any]:
+        """构建最终的workflow"""
+        import copy
+        final_workflow = copy.deepcopy(workflow_data)
+        
+        # 设置图片输入
+        input_nodes = config.get("input_nodes", [])
+        input_mappings = config.get("input_mappings", {})
+        
+        for node_id in input_nodes:
+            if node_id in input_mappings and node_id in final_workflow:
+                mapping = input_mappings[node_id]
+                param_name = mapping.get("parameter_name", "image")
+                if images and param_name == "image":
+                    final_workflow[node_id]["inputs"][param_name] = images[0]
+        
+        # 设置可配置节点参数
+        node_configs = config.get("node_configs", {})
+        for node_id, node_config in node_configs.items():
+            if node_id in final_workflow:
+                for param_name, param_config in node_config.items():
+                    if param_name in params:
+                        # 类型转换
+                        value = params[param_name]
+                        param_type = param_config.get("type", "text")
+                        
+                        if param_type == "number":
+                            try:
+                                value = float(value)
+                                if value.is_integer():
+                                    value = int(value)
+                            except ValueError:
+                                value = param_config.get("default", 0)
+                        elif param_type == "boolean":
+                            value = value.lower() in ("true", "1", "yes", "on")
+                        elif param_type == "select":
+                            options = param_config.get("options", [])
+                            if value not in options:
+                                value = param_config.get("default", options[0] if options else "")
+                        
+                        final_workflow[node_id]["inputs"][param_name] = value
+                    elif "default" in param_config:
+                        final_workflow[node_id]["inputs"][param_name] = param_config["default"]
+        
+        # 设置全局模型配置（跟随主配置）
+        if "30" in final_workflow and final_workflow["30"]["class_type"] == "CheckpointLoaderSimple":
+            if self.ckpt_name and not final_workflow["30"]["inputs"].get("ckpt_name"):
+                final_workflow["30"]["inputs"]["ckpt_name"] = self.ckpt_name
+        
+        return final_workflow
 
