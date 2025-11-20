@@ -1,0 +1,162 @@
+{
+  "name": "橘雪莉LoRA文生图",
+  "prefix": "juxueli",
+  "description": "使用橘雪莉LoRA进行文生图，支持图像加密功能",
+  "version": "1.0.0",
+  "author": "ComfyUI Plugin",
+  "input_nodes": [],
+  "output_nodes": ["9"],
+  "input_mappings": {},
+  "output_mappings": {
+    "9": {
+      "parameter_name": "images",
+      "type": "image",
+      "description": "生成的图片"
+    }
+  },
+  "configurable_nodes": ["6", "31", "33", "36", "30", "100", "44"],
+  "node_configs": {
+    "6": {
+      "text": {
+        "type": "text",
+        "required": true,
+        "default": "juxueli,blue_hair,embarrassed expression,outdoor,looking at viewer,hat,hair ornament,solo focus,gothic lolita dress,full body,front view",
+        "description": "正面提示词，描述想要生成的内容",
+        "aliases": ["提示词", "prompt", "positive_prompt", "正面提示"]
+      }
+    },
+    "31": {
+      "seed": {
+        "type": "number",
+        "default": -1,
+        "description": "随机种子，-1为随机种子，相同种子生成相同结果",
+        "min": -1,
+        "max": 4294967295,
+        "aliases": ["种子", "random_seed", "随机种子"]
+      },
+      "steps": {
+        "type": "number",
+        "default": 30,
+        "description": "采样步数，数值越大质量越高但速度越慢",
+        "min": 1,
+        "max": 150,
+        "aliases": ["步数", "inference_steps", "采样步数"]
+      },
+      "cfg": {
+        "type": "number",
+        "default": 6.5,
+        "description": "CFG系数，控制提示词对生成结果的影响强度",
+        "min": 1.0,
+        "max": 30.0,
+        "aliases": ["CFG", "cfg_scale", "CFG系数"]
+      },
+      "sampler_name": {
+        "type": "select",
+        "default": "euler",
+        "description": "采样器类型，影响生成风格和质量",
+        "options": ["euler", "euler_ancestral", "dpmpp_2m", "dpmpp_sde", "ddim", "uni_pc"],
+        "inject_samplers": true,
+        "aliases": ["采样器", "sampler", "采样方法"]
+      },
+      "scheduler": {
+        "type": "select",
+        "default": "simple",
+        "description": "调度器类型，影响采样过程",
+        "options": ["simple", "karras", "exponential", "normal", "sgm_uniform"],
+        "inject_schedulers": true,
+        "aliases": ["调度器", "scheduler_type", "调度方法"]
+      },
+      "denoise": {
+        "type": "number",
+        "default": 1.0,
+        "description": "噪声系数，文生图通常为1.0",
+        "min": 0.0,
+        "max": 1.0,
+        "aliases": ["噪声", "denoise_strength", "噪声系数"]
+      }
+    },
+    "33": {
+      "text": {
+        "type": "text",
+        "default": "bad quality,worst quality,worst detail, watermark, text, single background, incorrect cock position, unrealistic body structure, watermark, text, logo, composite roles, ((more than one cock)), cock through body, characteristics of multiple roles in one person, extra person, merged faces, blended features, crowd, chibi, doll, deformed anatomy, feature crossover",
+        "description": "负面提示词，描述不希望出现的内容",
+        "aliases": ["负面提示词", "negative_prompt", "负面提示"]
+      }
+    },
+    "36": {
+      "width": {
+        "type": "number",
+        "default": 1024,
+        "description": "生成图片的宽度像素",
+        "min": 64,
+        "max": 2048,
+        "aliases": ["宽度", "w", "image_width"]
+      },
+      "height": {
+        "type": "number",
+        "default": 1024,
+        "description": "生成图片的高度像素",
+        "min": 64,
+        "max": 2048,
+        "aliases": ["高度", "h", "image_height"]
+      },
+      "batch_size": {
+        "type": "number",
+        "default": 1,
+        "description": "批量生成数量，一次生成多张图片",
+        "min": 1,
+        "max": 6,
+        "aliases": ["批量", "batch", "批量数量"]
+      }
+    },
+    "30": {
+      "ckpt_name": {
+        "type": "select",
+        "default": "WAI_NSFW-illustrious-SDXL_v15.safetensors",
+        "description": "选择基础模型，决定生成风格",
+        "inject_models": true,
+        "aliases": ["模型", "model", "checkpoint", "基础模型"]
+      }
+    },
+    "100": {
+      "lora_name": {
+        "type": "select",
+        "default": "juxueli_v1.safetensors",
+        "description": "选择LoRA模型，用于特定角色或风格",
+        "options": ["juxueli_v1.safetensors"],
+        "aliases": ["LoRA", "lora", "LoRA模型"]
+      },
+      "strength_model": {
+        "type": "number",
+        "default": 1.0,
+        "description": "LoRA对模型的影响强度",
+        "min": 0.0,
+        "max": 2.0,
+        "aliases": ["LoRA模型强度", "lora_model_strength", "模型强度"]
+      },
+      "strength_clip": {
+        "type": "number",
+        "default": 1.0,
+        "description": "LoRA对CLIP文本编码的影响强度",
+        "min": 0.0,
+        "max": 2.0,
+        "aliases": ["LoRA文本强度", "lora_clip_strength", "文本强度"]
+      }
+    },
+    "44": {
+      "mode": {
+        "type": "select",
+        "default": "encrypt",
+        "description": "图像加密模式，encrypt为加密，decrypt为解密",
+        "options": ["encrypt", "decrypt"],
+        "aliases": ["模式", "encryption_mode", "加密模式"]
+      },
+      "enable": {
+        "type": "boolean",
+        "default": false,
+        "description": "是否启用图像加密功能",
+        "aliases": ["启用", "enable", "开启加密"]
+      }
+    }
+  }
+}

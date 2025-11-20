@@ -1,0 +1,140 @@
+{
+  "6": {
+    "inputs": {
+      "text": "juxueli,blue_hair,embarrassed expression,outdoor,looking at viewer,hat,hair ornament,solo focus,gothic lolita dress,full body,front view",
+      "clip": [
+        "100",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "31",
+        0
+      ],
+      "vae": [
+        "30",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "comfyui_gen",
+      "images": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "30": {
+    "inputs": {
+      "ckpt_name": "WAI_NSFW-illustrious-SDXL_v15.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load Checkpoint"
+    }
+  },
+  "31": {
+    "inputs": {
+      "seed": 17988152503114863000,
+      "steps": 30,
+      "cfg": 6.5,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "100",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "33",
+        0
+      ],
+      "latent_image": [
+        "36",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "33": {
+    "inputs": {
+      "text": "bad quality,worst quality,worst detail, watermark, text, single background, incorrect cock position, unrealistic body structure, watermark, text, logo,  composite roles, ((more than one cock)), cock through body, characteristics of multiple roles in one person, extra person, merged faces, blended features, crowd, chibi, doll, deformed anatomy, feature crossover",
+      "clip": [
+        "100",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "36": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "空Latent图像"
+    }
+  },
+  "44": {
+    "inputs": {
+      "mode": "encrypt",
+      "enable": false,
+      "image": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "HilbertImageEncrypt",
+    "_meta": {
+      "title": "希尔伯特曲线图像加密"
+    }
+  },
+  "100": {
+    "inputs": {
+      "lora_name": "juxueli_v1.safetensors",
+      "strength_model": 1,
+      "strength_clip": 1,
+      "model": [
+        "30",
+        0
+      ],
+      "clip": [
+        "30",
+        1
+      ]
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "Load LoRA: 橘雪莉"
+    }
+  }
+}

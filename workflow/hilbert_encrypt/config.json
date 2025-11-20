@@ -1,0 +1,51 @@
+{
+  "name": "图像加密解密",
+  "prefix": "encrypt",
+  "description": "使用希尔伯特曲线对图像进行加密或解密处理",
+  "version": "1.0.0",
+  "author": "ComfyUI Plugin",
+  "input_nodes": ["2"],
+  "output_nodes": ["3"],
+  "input_mappings": {
+    "2": {
+      "parameter_name": "image",
+      "required": true,
+      "type": "image",
+      "description": "需要加密或解密的输入图片"
+    }
+  },
+  "output_mappings": {
+    "3": {
+      "parameter_name": "images",
+      "type": "image",
+      "description": "处理后的图片（加密或解密结果）"
+    }
+  },
+  "configurable_nodes": ["1", "3"],
+  "node_configs": {
+    "1": {
+      "mode": {
+        "type": "select",
+        "default": "encrypt",
+        "description": "处理模式：encrypt为加密模式，decrypt为解密模式",
+        "options": ["encrypt", "decrypt"],
+        "aliases": ["模式", "mode", "处理模式", "加密模式"]
+      },
+      "enable": {
+        "type": "boolean",
+        "required": true,
+
+        "description": "是否启用加密/解密功能，false时直接输出原图",
+        "aliases": ["启用", "enable", "开启", "启用功能"]
+      }
+    },
+    "3": {
+      "filename_prefix": {
+        "type": "text",
+        "default": "ComfyUI",
+        "description": "保存图片的文件名前缀",
+        "aliases": ["文件前缀", "prefix", "文件名前缀", "保存前缀"]
+      }
+    }
+  }
+}

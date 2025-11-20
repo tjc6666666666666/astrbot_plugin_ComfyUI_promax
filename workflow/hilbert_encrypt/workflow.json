@@ -1,0 +1,38 @@
+{
+  "1": {
+    "inputs": {
+      "mode": "encrypt",
+      "enable": true,
+      "image": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "HilbertImageEncrypt",
+    "_meta": {
+      "title": "希尔伯特曲线图像加密"
+    }
+  },
+  "2": {
+    "inputs": {
+      "image": "1763096737_b2a450eb.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "3": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  }
+}
