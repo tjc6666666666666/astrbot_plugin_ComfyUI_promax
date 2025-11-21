@@ -3215,17 +3215,22 @@ class ModComfyUI(Star):
         params = {}
         node_configs = config.get("node_configs", {})
         
-        # 构建参数名映射表（包括别名）
+        # 构建参数名映射表（包括别名），支持多节点
+        # 格式：{别名: [(node_id, param_name), ...]}
         param_mapping = {}
         for node_id, node_config in node_configs.items():
             for param_name, param_info in node_config.items():
                 # 主参数名
-                param_mapping[param_name] = param_name
+                if param_name not in param_mapping:
+                    param_mapping[param_name] = []
+                param_mapping[param_name].append((node_id, param_name))
                 
                 # 添加别名
                 aliases = param_info.get("aliases", [])
                 for alias in aliases:
-                    param_mapping[alias] = param_name
+                    if alias not in param_mapping:
+                        param_mapping[alias] = []
+                    param_mapping[alias].append((node_id, param_name))
         
         # 解析参数，格式为 参数名:值
         for arg in args:
@@ -3233,9 +3238,39 @@ class ModComfyUI(Star):
                 continue
             key, value = arg.split(":", 1)
             
-            # 查找实际参数名（支持别名）
-            actual_key = param_mapping.get(key, key)
-            params[actual_key] = value
+            # 查找匹配的节点和参数
+            matches = param_mapping.get(key, [])
+            
+            if len(matches) == 1:
+                # 只有一个匹配，直接使用
+                node_id, param_name = matches[0]
+                # 使用 node_id:param_name 作为键，避免冲突
+                params[f"{node_id}:{param_name}"] = value
+            elif len(matches) > 1:
+                # 多个匹配，需要更精确的匹配策略
+                # 优先选择在aliases中明确包含该key的参数
+                exact_matches = []
+                for node_id, param_name in matches:
+                    param_info = node_configs.get(node_id, {}).get(param_name, {})
+                    aliases = param_info.get("aliases", [])
+                    if key in aliases:
+                        exact_matches.append((node_id, param_name))
+                
+                if len(exact_matches) == 1:
+                    # 只有一个精确匹配
+                    node_id, param_name = exact_matches[0]
+                    params[f"{node_id}:{param_name}"] = value
+                elif len(exact_matches) > 1:
+                    # 多个精确匹配，选择第一个（通常配置文件中顺序是确定的）
+                    node_id, param_name = exact_matches[0]
+                    params[f"{node_id}:{param_name}"] = value
+                else:
+                    # 没有精确匹配，使用第一个匹配
+                    node_id, param_name = matches[0]
+                    params[f"{node_id}:{param_name}"] = value
+            else:
+                # 没有匹配，保持原样
+                params[key] = value
         
         return params
 
@@ -3244,28 +3279,43 @@ class ModComfyUI(Star):
         missing_params = []
         node_configs = config.get("node_configs", {})
         
-        # 构建参数名映射表（包括别名）
+        # 构建参数名映射表（包括别名），支持多节点
         param_mapping = {}
         for node_id, node_config in node_configs.items():
             for param_name, param_info in node_config.items():
                 # 主参数名
-                param_mapping[param_name] = param_name
+                if param_name not in param_mapping:
+                    param_mapping[param_name] = []
+                param_mapping[param_name].append((node_id, param_name))
                 
                 # 添加别名
                 aliases = param_info.get("aliases", [])
                 for alias in aliases:
-                    param_mapping[alias] = param_name
+                    if alias not in param_mapping:
+                        param_mapping[alias] = []
+                    param_mapping[alias].append((node_id, param_name))
         
         # 检查每个必需参数
         for node_id, node_config in node_configs.items():
             for param_name, param_info in node_config.items():
                 if param_info.get("required", False):
-                    # 检查参数是否已提供（包括通过别名提供的）
+                    # 检查参数是否已提供（包括节点特定格式和别名）
                     param_provided = False
-                    for provided_key in params.keys():
-                        if param_mapping.get(provided_key) == param_name:
-                            param_provided = True
-                            break
+                    
+                    # 检查节点特定格式
+                    node_specific_key = f"{node_id}:{param_name}"
+                    if node_specific_key in params:
+                        param_provided = True
+                    else:
+                        # 检查通用参数名和别名
+                        for provided_key in params.keys():
+                            matches = param_mapping.get(provided_key, [])
+                            for match_node_id, match_param_name in matches:
+                                if match_node_id == node_id and match_param_name == param_name:
+                                    param_provided = True
+                                    break
+                            if param_provided:
+                                break
                     
                     if not param_provided:
                         # 获取参数的显示名称（优先使用第一个别名，如果没有别名则使用主参数名）
@@ -3295,40 +3345,70 @@ class ModComfyUI(Star):
                 if images and param_name == "image":
                     final_workflow[node_id]["inputs"][param_name] = images[0]
         
-        # 设置可配置节点参数
+        # 创建参数名到别名的反向映射，用于快速查找
+        param_to_aliases = {}
         node_configs = config.get("node_configs", {})
         for node_id, node_config in node_configs.items():
-            if node_id in final_workflow:
-                for param_name, param_config in node_config.items():
+            for param_name, param_config in node_config.items():
+                aliases = param_config.get("aliases", [])
+                for alias in aliases:
+                    if alias not in param_to_aliases:
+                        param_to_aliases[alias] = []
+                    param_to_aliases[alias].append((node_id, param_name))
+        
+        # 设置可配置节点参数 - 只修改配置文件中明确指定的节点
+        for node_id, node_config in node_configs.items():
+            if node_id not in final_workflow:
+                continue
+                
+            for param_name, param_config in node_config.items():
+                # 首先检查节点特定的参数格式 node_id:param_name
+                value = None
+                node_specific_key = f"{node_id}:{param_name}"
+                if node_specific_key in params:
+                    value = params[node_specific_key]
+                else:
+                    # 检查直接参数名匹配
                     if param_name in params:
-                        # 类型转换
                         value = params[param_name]
-                        param_type = param_config.get("type", "text")
-                        
-                        if param_type == "number":
-                            try:
-                                value = float(value)
-                                if value.is_integer():
-                                    value = int(value)
-                                # 特殊处理seed参数：如果值为-1，则生成随机种子
-                                if param_name == "seed" and value == -1:
-                                    value = random.randint(1, 18446744073709551615)
-                            except ValueError:
-                                value = param_config.get("default", 0)
-                        elif param_type == "boolean":
-                            value = value.lower() in ("true", "1", "yes", "on")
-                        elif param_type == "select":
-                            options = param_config.get("options", [])
-                            if value not in options:
-                                value = param_config.get("default", options[0] if options else "")
-                        
-                        final_workflow[node_id]["inputs"][param_name] = value
-                    elif "default" in param_config:
-                        value = param_config["default"]
-                        # 特殊处理seed参数：如果默认值为-1，则生成随机种子
-                        if param_name == "seed" and value == -1:
-                            value = random.randint(1, 18446744073709551615)
-                        final_workflow[node_id]["inputs"][param_name] = value
+                    else:
+                        # 检查别名匹配
+                        aliases = param_config.get("aliases", [])
+                        for alias in aliases:
+                            if alias in params:
+                                value = params[alias]
+                                break
+                
+                # 如果找到了值，进行类型转换和设置
+                if value is not None:
+                    # 类型转换
+                    param_type = param_config.get("type", "text")
+                    
+                    if param_type == "number":
+                        try:
+                            value = float(value)
+                            if value.is_integer():
+                                value = int(value)
+                            # 特殊处理seed参数：如果值为-1，则生成随机种子
+                            if param_name == "seed" and value == -1:
+                                value = random.randint(1, 18446744073709551615)
+                        except ValueError:
+                            value = param_config.get("default", 0)
+                    elif param_type == "boolean":
+                        value = value.lower() in ("true", "1", "yes", "on")
+                    elif param_type == "select":
+                        options = param_config.get("options", [])
+                        if value not in options:
+                            value = param_config.get("default", options[0] if options else "")
+                    
+                    final_workflow[node_id]["inputs"][param_name] = value
+                elif "default" in param_config:
+                    # 使用默认值
+                    value = param_config["default"]
+                    # 特殊处理seed参数：如果默认值为-1，则生成随机种子
+                    if param_name == "seed" and value == -1:
+                        value = random.randint(1, 18446744073709551615)
+                    final_workflow[node_id]["inputs"][param_name] = value
         
         # 设置全局模型配置（跟随主配置）
         if "30" in final_workflow and final_workflow["30"]["class_type"] == "CheckpointLoaderSimple":
