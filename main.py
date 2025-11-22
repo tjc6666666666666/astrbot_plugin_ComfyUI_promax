@@ -1334,7 +1334,7 @@ class ModComfyUI(Star):
                     await self._process_comfyui_task_with_server(server, **task_data)
                 except Exception as e:
                     event = task_data["event"]
-                    err_msg = f"\n图片生成失败：{str(e)[:100]}"
+                    err_msg = f"\n图片生成失败：{str(e)[:1000]}"
                     await self._send_with_auto_recall(event, event.plain_result(err_msg))
                     logger.error(f"{worker_name}处理任务失败：{str(e)}")
                 finally:
@@ -1470,6 +1470,69 @@ class ModComfyUI(Star):
             selected_model = filename
             
         return non_model_params, selected_model
+
+    def _is_model_not_found_error(self, error_msg: str) -> bool:
+        """检查错误是否是模型不存在的错误"""
+        return ("value_not_in_list" in error_msg and 
+                "ckpt_name" in error_msg and 
+                "not in" in error_msg)
+
+    def _is_node_not_found_error(self, error_msg: str) -> bool:
+        """检查错误是否是节点不存在的错误"""
+        error_msg_lower = error_msg.lower()
+        return (
+            ("invalid_prompt" in error_msg or "does not exist" in error_msg_lower) and 
+            "node" in error_msg_lower and
+            ("does not exist" in error_msg_lower or "not found" in error_msg_lower)
+        )
+
+    def _extract_node_name_from_error(self, error_msg: str) -> Optional[str]:
+        """从错误信息中提取节点名称"""
+        import re
+        
+        # 尝试多种匹配模式
+        patterns = [
+            # 模式1: "node Eff. Loader SDXL does not exist"
+            r"node\s+([^\s]+(?:\s+[^\s]+)*?)\s+does not exist",
+            # 模式2: "Cannot execute because node Eff. Loader SDXL does not exist"
+            r"because\s+node\s+([^\s]+(?:\s+[^\s]+)*?)\s+does not exist",
+            # 模式3: 在message字段中查找节点名称
+            r"node\s+([^.]+)\s+does not exist",
+            # 模式4: 更宽松的匹配，包含特殊字符
+            r"node\s+([^.\n]+?)\s+does not exist"
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, error_msg, re.IGNORECASE)
+            if match:
+                node_name = match.group(1).strip()
+                # 清理多余的空格和特殊字符
+                node_name = re.sub(r'\s+', ' ', node_name).strip()
+                if node_name:
+                    return node_name
+        
+        return None
+
+    def _extract_model_name_from_error(self, error_msg: str) -> Optional[str]:
+        """从错误信息中提取模型名称"""
+        import re
+        # 匹配类似 "ckpt_name: '234334' not in" 的模式
+        match = re.search(r"ckpt_name:\s*['\"]([^'\"]+)['\"]\s*not in", error_msg)
+        if match:
+            return match.group(1)
+        return None
+
+    def _get_available_models_from_error(self, error_msg: str) -> Optional[str]:
+        """从错误信息中提取可用模型列表"""
+        import re
+        # 匹配类似 "not in ['model1.safetensors', 'model2.safetensors']" 的模式
+        match = re.search(r"not in\s*\[([^\]]+)\]", error_msg)
+        if match:
+            models_str = match.group(1)
+            # 移除引号并分割
+            models = [model.strip().strip("'\"") for model in models_str.split(",")]
+            return ", ".join(models)
+        return None
 
     def _build_comfyui_prompt(
         self,
@@ -1665,7 +1728,26 @@ class ModComfyUI(Star):
                     return
                 except Exception as e:
                     last_error = e
-                    logger.error(f"服务器{server.name}处理任务失败（重试{retry_count}/{max_retries}）：{str(e)}")
+                    error_msg = str(e)
+                    
+                    # 检查是否是模型不存在的错误，如果是则不重试
+                    if self._is_model_not_found_error(error_msg):
+                        model_name = self._extract_model_name_from_error(error_msg)
+                        available_models = self._get_available_models_from_error(error_msg)
+                        if model_name and available_models:
+                            raise Exception(f"模型「{model_name}」未安装到服务器【{server.name}】上，请安装该模型。\n可用模型：{available_models}")
+                        else:
+                            raise Exception(f"指定的模型未安装到服务器【{server.name}】上，请检查模型配置。")
+                    
+                    # 检查是否是节点不存在的错误，如果是则不重试
+                    if self._is_node_not_found_error(error_msg):
+                        node_name = self._extract_node_name_from_error(error_msg)
+                        if node_name:
+                            raise Exception(f"节点「{node_name}」未安装到服务器【{server.name}】上，请安装该节点。")
+                        else:
+                            raise Exception(f"指定的节点未安装到服务器【{server.name}】上，请检查节点配置。")
+                    
+                    logger.error(f"服务器{server.name}处理任务失败（重试{retry_count}/{max_retries}）：{error_msg}")
                     await self._handle_server_failure(server)
                     
                     # 如果服务器已被标记为不健康，不再重试
@@ -1678,7 +1760,7 @@ class ModComfyUI(Star):
                 
             # 所有重试失败
             if last_error:
-                filtered_error = self._filter_server_urls(str(last_error)[:100])
+                filtered_error = self._filter_server_urls(str(last_error)[:1000])
                 raise Exception(f"服务器{server.name}处理任务失败：{filtered_error}")
             else:
                 raise Exception(f"服务器{server.name}处理任务失败，原因未知")
@@ -1836,7 +1918,7 @@ class ModComfyUI(Star):
             async with session.post(url, headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     resp_text = await resp.text()
-                    filtered_resp = self._filter_server_urls(resp_text[:50])
+                    filtered_resp = self._filter_server_urls(resp_text[:50000])
                     raise Exception(f"任务下发失败（HTTP {resp.status}）：{filtered_resp}")
                 resp_data = await resp.json()
                 return resp_data.get("prompt_id", "")
@@ -3274,7 +3356,7 @@ class ModComfyUI(Star):
             img_path = await selected_image.convert_to_file_path()
             image_filename = await self._upload_image_to_comfyui(upload_server, img_path)
         except Exception as e:
-            await self._send_with_auto_recall(event, event.plain_result(f"\n图片处理失败：{str(e)[:100]}"))
+            await self._send_with_auto_recall(event, event.plain_result(f"\n图片处理失败：{str(e)[:1000]}"))
             return
         try:
             current_seed = random.randint(1, 18446744073709551615) if (self.seed == "随机" or not self.seed) else int(self.seed)
@@ -3582,7 +3664,7 @@ class ModComfyUI(Star):
                     img_path = await image_seg.convert_to_file_path()
                     image_filename = await self._upload_image_to_comfyui(upload_server, img_path)
                 except Exception as e:
-                    await self._send_with_auto_recall(event, event.plain_result(f"图片上传失败：{str(e)[:100]}"))
+                    await self._send_with_auto_recall(event, event.plain_result(f"图片上传失败：{str(e)[:1000]}"))
                     return
                 if not image_filename:
                     await self._send_with_auto_recall(event, event.plain_result("图片上传失败"))
