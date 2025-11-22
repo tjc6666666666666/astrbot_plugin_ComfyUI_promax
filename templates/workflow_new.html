@@ -21,10 +21,17 @@
 <form id="workflowForm" method="post" action="{{ url_for('workflow_create') }}">
     <!-- 基本信息 -->
     <div class="config-section p-4 mb-4">
-        <h5 class="mb-4">
-            <i class="bi bi-info-circle text-primary"></i>
-            基本信息
-        </h5>
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="mb-0">
+                <i class="bi bi-info-circle text-primary"></i>
+                基本信息
+            </h5>
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleSection(this)" data-bs-toggle="tooltip" title="展开/折叠">
+                <i class="bi bi-chevron-down"></i>
+            </button>
+        </div>
+        
+        <div class="section-content" style="display: none;">
         
         <div class="row mb-3">
             <label class="col-sm-2 col-form-label">工作流名称</label>
@@ -76,14 +83,22 @@
                        value="ComfyUI Plugin">
             </div>
         </div>
+        </div>
     </div>
 
     <!-- Workflow JSON -->
     <div class="config-section p-4 mb-4">
-        <h5 class="mb-4">
-            <i class="bi bi-code-slash text-info"></i>
-            Workflow JSON
-        </h5>
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="mb-0">
+                <i class="bi bi-code-slash text-info"></i>
+                Workflow JSON
+            </h5>
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleSection(this)" data-bs-toggle="tooltip" title="展开/折叠">
+                <i class="bi bi-chevron-down"></i>
+            </button>
+        </div>
+        
+        <div class="section-content" style="display: none;">
         
         <div class="mb-3">
             <label class="form-label">ComfyUI Workflow JSON</label>
@@ -101,14 +116,22 @@
             </button>
             <div class="form-text">点击此按钮解析 JSON 中的所有节点，然后可以在下方选择节点</div>
         </div>
+        </div>
     </div>
 
     <!-- 节点配置 -->
     <div class="config-section p-4 mb-4">
-        <h5 class="mb-4">
-            <i class="bi bi-diagram-2 text-success"></i>
-            节点配置
-        </h5>
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="mb-0">
+                <i class="bi bi-diagram-2 text-success"></i>
+                节点配置
+            </h5>
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleSection(this)" data-bs-toggle="tooltip" title="展开/折叠">
+                <i class="bi bi-chevron-down"></i>
+            </button>
+        </div>
+        
+        <div class="section-content" style="display: none;">
         
         <div class="row mb-3">
             <label class="col-sm-2 col-form-label">输入节点</label>
@@ -172,14 +195,22 @@
                 <div class="form-text">可配置节点是用户可以在运行时修改参数的节点</div>
             </div>
         </div>
+        </div>
     </div>
 
     <!-- 自动映射预览 -->
     <div class="config-section p-4 mb-4">
-        <h5 class="mb-4">
-            <i class="bi bi-arrow-left-right text-warning"></i>
-            自动映射预览
-        </h5>
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="mb-0">
+                <i class="bi bi-arrow-left-right text-warning"></i>
+                自动映射预览
+            </h5>
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleSection(this)" data-bs-toggle="tooltip" title="展开/折叠">
+                <i class="bi bi-chevron-down"></i>
+            </button>
+        </div>
+        
+        <div class="section-content" style="display: none;">
         
         <div class="alert alert-info">
             <i class="bi bi-info-circle"></i>
@@ -211,25 +242,34 @@
                 </div>
             </div>
         </div>
-    </div>
-
-    <!-- 模板选择 -->
-    <div class="config-section p-4 mb-4">
-        <h5 class="mb-4">
-            <i class="bi bi-file-earmark-template text-info"></i>
-            使用模板
-        </h5>
-        
-        <div class="row mb-3">
-            <label class="col-sm-2 col-form-label">选择模板</label>
-            <div class="col-sm-10">
-                <select class="form-select" id="templateSelect" onchange="loadTemplate()">
-                    <option value="">-- 选择模板 --</option>
-                </select>
-                <div class="form-text">选择预设模板可以快速创建工作流配置</div>
-            </div>
         </div>
     </div>
+
+    <!-- 节点参数配置 -->
+    <div class="config-section p-4 mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="mb-0">
+                <i class="bi bi-gear-fill text-warning"></i>
+                节点参数配置
+            </h5>
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleSection(this)" data-bs-toggle="tooltip" title="展开/折叠">
+                <i class="bi bi-chevron-down"></i>
+            </button>
+        </div>
+        
+        <div class="section-content" style="display: none;">
+            <div id="nodeConfigsContainer">
+                <!-- 节点配置项将动态添加到这里 -->
+            </div>
+            
+            <button type="button" class="btn btn-outline-primary" onclick="addNodeConfig()">
+                <i class="bi bi-plus"></i>
+                添加节点配置
+            </button>
+        </div>
+    </div>
+
+
 
 
 
@@ -240,7 +280,21 @@
 </form>
 {% endblock %}
 
-{% block scripts %}
+{% block scripts %}<style>
+.section-content {
+    border-left: 3px solid #007bff;
+    padding-left: 15px;
+    margin-left: 10px;
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    padding: 15px;
+}
+
+.bi-chevron-down, .bi-chevron-up {
+    transition: transform 0.2s ease;
+}
+</style>
+
 <script>
 // 解析 Workflow JSON 中的节点
 function parseWorkflowNodes() {
@@ -302,88 +356,10 @@ function updateAllNodeSelectors(nodes) {
     });
 }
 
-// 加载模板列表
+// 页面加载完成后的初始化
 document.addEventListener('DOMContentLoaded', function() {
-    loadTemplates();
     updateMappingPreview();
 });
-
-async function loadTemplates() {
-    try {
-        const response = await fetch('/api/workflow_templates');
-        const templates = await response.json();
-        const select = document.getElementById('templateSelect');
-        
-        templates.forEach(template => {
-            const option = document.createElement('option');
-            option.value = template.name;
-            option.textContent = `${template.name} - ${template.description}`;
-            option.dataset.template = JSON.stringify(template);
-            select.appendChild(option);
-        });
-    } catch (error) {
-        console.error('加载模板失败:', error);
-    }
-}
-
-function loadTemplate() {
-    const select = document.getElementById('templateSelect');
-    const selectedOption = select.options[select.selectedIndex];
-    
-    if (!selectedOption.value) return;
-    
-    try {
-        const template = JSON.parse(selectedOption.dataset.template);
-        
-        // 填充基本信息
-        document.querySelector('input[name="name"]').value = template.name || '';
-        document.querySelector('input[name="prefix"]').value = template.prefix || '';
-        document.querySelector('textarea[name="description"]').value = template.description || '';
-        document.querySelector('input[name="version"]').value = template.version || '1.0.0';
-        document.querySelector('input[name="author"]').value = template.author || 'ComfyUI Plugin';
-        
-        // 清空现有节点列表
-        document.getElementById('inputNodesList').innerHTML = '';
-        document.getElementById('outputNodesList').innerHTML = '';
-        document.getElementById('configurableNodesList').innerHTML = '';
-        
-        // 添加输入节点
-        if (template.input_nodes && template.input_nodes.length > 0) {
-            template.input_nodes.forEach(nodeId => {
-                addInputNode(nodeId);
-            });
-        } else {
-            addInputNode();
-        }
-        
-        // 添加输出节点
-        if (template.output_nodes && template.output_nodes.length > 0) {
-            template.output_nodes.forEach(nodeId => {
-                addOutputNode(nodeId);
-            });
-        } else {
-            addOutputNode();
-        }
-        
-        // 添加可配置节点
-        if (template.configurable_nodes && template.configurable_nodes.length > 0) {
-            template.configurable_nodes.forEach(nodeId => {
-                addConfigurableNode(nodeId);
-            });
-        } else {
-            addConfigurableNode();
-        }
-        
-        // 更新映射预览
-        setTimeout(updateMappingPreview, 100);
-        
-        document.getElementById('nodeConfigsInput').value = JSON.stringify(template.node_configs || {});
-        
-    } catch (error) {
-        console.error('加载模板失败:', error);
-        alert('加载模板失败: ' + error.message);
-    }
-}
 
 // 添加输入节点
 function addInputNode(value = '') {
@@ -580,12 +556,12 @@ document.getElementById('workflowForm').addEventListener('submit', function(e) {
     }
     
     // 自动生成输入输出映射
-    const inputNodes = Array.from(document.querySelectorAll('input[name="input_nodes"]'))
-        .map(input => input.value.trim())
+    const inputNodes = Array.from(document.querySelectorAll('select[name="input_nodes"]'))
+        .map(select => select.value.trim())
         .filter(v => v);
     
-    const outputNodes = Array.from(document.querySelectorAll('input[name="output_nodes"]'))
-        .map(input => input.value.trim())
+    const outputNodes = Array.from(document.querySelectorAll('select[name="output_nodes"]'))
+        .map(select => select.value.trim())
         .filter(v => v);
     
     const inputMappings = {};
@@ -608,6 +584,490 @@ document.getElementById('workflowForm').addEventListener('submit', function(e) {
     
     document.getElementById('inputMappingsInput').value = JSON.stringify(inputMappings);
     document.getElementById('outputMappingsInput').value = JSON.stringify(outputMappings);
+    
+    // 获取 workflow JSON
+    const workflowJson = document.getElementById('workflowJson').value.trim();
+    if (workflowJson) {
+        try {
+            // 验证 JSON 格式
+            JSON.parse(workflowJson);
+        } catch (error) {
+            e.preventDefault();
+            alert('Workflow JSON 格式错误：' + error.message);
+            return;
+        }
+    }
 });
+
+// 切换主要部分的展开/折叠状态
+function toggleSection(button) {
+    const section = button.closest('.config-section');
+    const content = section.querySelector('.section-content');
+    const icon = button.querySelector('i');
+    
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        icon.classList.remove('bi-chevron-down');
+        icon.classList.add('bi-chevron-up');
+    } else {
+        content.style.display = 'none';
+        icon.classList.remove('bi-chevron-up');
+        icon.classList.add('bi-chevron-down');
+    }
+}
+
+// 添加节点配置
+function addNodeConfig() {
+    // 获取所有已选择的可配置节点
+    const configurableNodes = Array.from(document.querySelectorAll('select[name="configurable_nodes"]'))
+        .map(select => select.value.trim())
+        .filter(v => v);
+    
+    // 获取已经配置了参数的节点
+    const existingConfigNodes = Array.from(document.querySelectorAll('.param-item[data-node-id]'))
+        .map(item => item.getAttribute('data-node-id'));
+    
+    // 过滤出还未配置参数的节点
+    const availableNodes = configurableNodes.filter(nodeId => !existingConfigNodes.includes(nodeId));
+    
+    if (availableNodes.length === 0) {
+        alert('没有可配置的节点，请先在上方选择可配置节点');
+        return;
+    }
+    
+    // 创建选择对话框
+    let nodeOptions = availableNodes.map(nodeId => {
+        const selectElement = Array.from(document.querySelectorAll('select[name="configurable_nodes"]'))
+            .find(select => select.value === nodeId);
+        const optionText = selectElement ? selectElement.options[selectElement.selectedIndex].text : nodeId;
+        return `<option value="${nodeId}">${optionText}</option>`;
+    }).join('');
+    
+    // 创建模态框选择节点
+    const modalHtml = `
+        <div class="modal fade" id="nodeSelectModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">选择要配置的节点</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <select class="form-select" id="nodeSelect">
+                            ${nodeOptions}
+                        </select>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary" onclick="confirmAddNodeConfig()">确定</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // 移除已存在的模态框
+    const existingModal = document.getElementById('nodeSelectModal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    // 添加新模态框
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    
+    // 显示模态框
+    const modal = new bootstrap.Modal(document.getElementById('nodeSelectModal'));
+    modal.show();
+}
+
+// 确认添加节点配置
+function confirmAddNodeConfig() {
+    const select = document.getElementById('nodeSelect');
+    const nodeId = select.value;
+    
+    if (!nodeId) {
+        alert('请选择一个节点');
+        return;
+    }
+    
+    const container = document.getElementById('nodeConfigsContainer');
+    const div = document.createElement('div');
+    div.className = 'param-item mb-4';
+    div.setAttribute('data-node-id', nodeId);
+    div.innerHTML = `
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="mb-0">
+                <i class="bi bi-cpu"></i>
+                <span class="node-title" data-node-id="${nodeId}">节点 ${nodeId}</span>
+            </h6>
+            <div>
+                <button type="button" class="btn btn-outline-secondary btn-sm me-2" onclick="toggleNodeConfig(this)" data-bs-toggle="tooltip" title="展开/折叠">
+                    <i class="bi bi-chevron-down"></i>
+                </button>
+                <button type="button" class="btn btn-outline-danger btn-sm" onclick="removeNodeConfig(this)">
+                    <i class="bi bi-trash"></i>
+                    删除节点配置
+                </button>
+            </div>
+        </div>
+        
+        <div class="param-content" style="display: none;">
+            <div class="row mb-3">
+                <div class="col-12">
+                    <div class="param-params-container">
+                        <button type="button" class="btn btn-outline-primary btn-sm" onclick="addParamConfig(this)">
+                            <i class="bi bi-plus"></i>
+                            添加参数
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    container.appendChild(div);
+    
+    // 更新新节点的标题
+    updateNodeTitles();
+    
+    // 关闭模态框
+    const modal = bootstrap.Modal.getInstance(document.getElementById('nodeSelectModal'));
+    modal.hide();
+}
+
+function removeNodeConfig(button) {
+    button.closest('.param-item').remove();
+}
+
+// 折叠/展开节点配置
+function toggleNodeConfig(button) {
+    const paramItem = button.closest('.param-item');
+    const content = paramItem.querySelector('.param-content');
+    const icon = button.querySelector('i');
+    
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        icon.className = 'bi bi-chevron-up';
+    } else {
+        content.style.display = 'none';
+        icon.className = 'bi bi-chevron-down';
+    }
+}
+
+// 更新节点标题显示
+function updateNodeTitles() {
+    const workflowJson = document.getElementById('workflowJson').value;
+    if (!workflowJson.trim()) return;
+    
+    try {
+        const workflow = JSON.parse(workflowJson);
+        const nodeTitles = document.querySelectorAll('.node-title');
+        
+        nodeTitles.forEach(titleElement => {
+            const nodeId = titleElement.getAttribute('data-node-id');
+            const nodeData = workflow[nodeId];
+            
+            if (nodeData) {
+                const title = nodeData._meta?.title || nodeData.class_type || `节点 ${nodeId}`;
+                titleElement.textContent = `${nodeId} - ${title}`;
+            }
+        });
+    } catch (error) {
+        console.error('解析工作流JSON失败:', error);
+    }
+}
+
+// 添加参数配置
+function addParamConfig(button) {
+    // 获取当前节点ID
+    const nodeItem = button.closest('.param-item');
+    const nodeId = nodeItem.getAttribute('data-node-id');
+    
+    if (!nodeId) {
+        alert('无法获取节点ID');
+        return;
+    }
+    
+    // 解析工作流JSON获取该节点的inputs
+    const workflowJson = document.getElementById('workflowJson').value;
+    if (!workflowJson.trim()) {
+        alert('请先解析工作流JSON');
+        return;
+    }
+    
+    try {
+        const workflow = JSON.parse(workflowJson);
+        const nodeData = workflow[nodeId];
+        
+        if (!nodeData || !nodeData.inputs) {
+            alert(`节点 ${nodeId} 没有找到 inputs 数据`);
+            return;
+        }
+        
+        // 获取已配置的参数名
+        const container = button.parentElement;
+        const existingParams = Array.from(container.querySelectorAll('.param-config-item'))
+            .map(item => item.getAttribute('data-param-name'));
+        
+        // 获取可配置的参数（排除已配置的）
+        const availableInputs = Object.keys(nodeData.inputs).filter(paramName => 
+            !existingParams.includes(paramName)
+        );
+        
+        if (availableInputs.length === 0) {
+            alert('该节点的所有参数都已配置');
+            return;
+        }
+        
+        // 创建选择对话框
+        let inputOptions = availableInputs.map(paramName => {
+            const inputValue = nodeData.inputs[paramName];
+            let valueDisplay = '';
+            
+            // 处理不同类型的输入值显示
+            if (Array.isArray(inputValue)) {
+                valueDisplay = ` [连接: ${inputValue[0]}]`;
+            } else if (typeof inputValue === 'string') {
+                valueDisplay = ` = "${inputValue}"`;
+            } else if (typeof inputValue === 'number') {
+                valueDisplay = ` = ${inputValue}`;
+            } else {
+                valueDisplay = ` = ${JSON.stringify(inputValue)}`;
+            }
+            
+            return `<option value="${paramName}">${paramName}${valueDisplay}</option>`;
+        }).join('');
+        
+        // 创建模态框选择参数
+        const modalHtml = `
+            <div class="modal fade" id="paramSelectModal" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">选择要配置的参数 - 节点 ${nodeId}</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <label class="form-label">可配置的参数：</label>
+                            <select class="form-select" id="paramSelect">
+                                ${inputOptions}
+                            </select>
+                            <div class="mt-3">
+                                <small class="text-muted">注意：连接类型的参数（显示为[连接: xxx]）通常不需要配置，因为它们是节点间的连接。</small>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                            <button type="button" class="btn btn-primary" onclick="confirmAddParamConfig('${nodeId}')">确定</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // 移除已存在的模态框
+        const existingModal = document.getElementById('paramSelectModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        // 添加新模态框
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        
+        // 显示模态框
+        const modal = new bootstrap.Modal(document.getElementById('paramSelectModal'));
+        modal.show();
+        
+    } catch (error) {
+        console.error('解析工作流JSON失败:', error);
+        alert('解析工作流JSON失败: ' + error.message);
+    }
+}
+
+// 确认添加参数配置
+function confirmAddParamConfig(nodeId) {
+    const select = document.getElementById('paramSelect');
+    const paramName = select.value;
+    
+    if (!paramName) {
+        alert('请选择一个参数');
+        return;
+    }
+    
+    // 解析工作流JSON获取参数的默认值
+    const workflowJson = document.getElementById('workflowJson').value;
+    let defaultValue = '';
+    
+    try {
+        const workflow = JSON.parse(workflowJson);
+        const nodeData = workflow[nodeId];
+        if (nodeData && nodeData.inputs && nodeData.inputs[paramName] !== undefined) {
+            const inputValue = nodeData.inputs[paramName];
+            if (!Array.isArray(inputValue)) { // 不是连接类型
+                defaultValue = inputValue;
+            }
+        }
+    } catch (error) {
+        console.error('解析默认值失败:', error);
+    }
+    
+    const container = document.getElementById('paramSelectModal').querySelector('.modal-body');
+    const targetContainer = document.querySelector(`.param-item[data-node-id="${nodeId}"] .param-params-container`);
+    
+    const div = document.createElement('div');
+    div.className = 'param-config-item mb-3 p-3 border rounded';
+    div.setAttribute('data-param-name', paramName);
+    div.innerHTML = `
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <strong>${paramName}</strong>
+            <div>
+                <button type="button" class="btn btn-outline-secondary btn-sm me-2" onclick="toggleParamConfig(this)" data-bs-toggle="tooltip" title="展开/折叠">
+                    <i class="bi bi-chevron-down"></i>
+                </button>
+                <button type="button" class="btn btn-outline-danger btn-sm" onclick="removeParamConfig(this)">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        </div>
+        
+        <div class="param-config-content" style="display: none;">
+            <div class="row">
+                <div class="col-md-6 mb-2">
+                    <label class="form-label">参数名</label>
+                    <input type="text" class="form-control" name="param_name" 
+                           value="${paramName}" readonly>
+                </div>
+                <div class="col-md-6 mb-2">
+                    <label class="form-label">类型</label>
+                    <select class="form-select" name="param_type">
+                        <option value="text">文本</option>
+                        <option value="number">数字</option>
+                        <option value="select">选择</option>
+                        <option value="boolean">布尔值</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="row">
+                <div class="col-md-6 mb-2">
+                    <label class="form-label">默认值</label>
+                    <div class="param-default-container">
+                        <input type="text" class="form-control param-default-text" name="param_default" 
+                               value="${typeof defaultValue === 'string' ? defaultValue : ''}">
+                        <input type="number" class="form-control param-default-number" name="param_default" 
+                               value="${typeof defaultValue === 'number' ? defaultValue : ''}" 
+                               style="display:none;" step="any">
+                        <div class="form-check form-switch param-default-boolean" style="display:none;">
+                            <input class="form-check-input" type="checkbox" name="param_default" onchange="updateBooleanLabel(this)">
+                            <label class="form-check-label boolean-label">False</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6 mb-2">
+                    <div class="form-check mt-4">
+                        <input class="form-check-input" type="checkbox" name="param_required">
+                        <label class="form-check-label">必需参数</label>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mb-2">
+                <label class="form-label">描述</label>
+                <textarea class="form-control" name="param_description" rows="2"></textarea>
+            </div>
+            
+            <div class="mb-2">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <label class="form-label mb-0">特殊功能</label>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleSpecialFeatures(this)" data-bs-toggle="tooltip" title="展开/折叠">
+                        <i class="bi bi-chevron-down"></i>
+                    </button>
+                </div>
+                <div class="special-features-content" style="display: none;">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="param_inject_models">
+                        <label class="form-check-label">注入可用模型列表</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="param_inject_loras">
+                        <label class="form-check-label">注入可用LoRA列表</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="param_inject_samplers">
+                        <label class="form-check-label">注入可用采样器列表</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="param_inject_schedulers">
+                        <label class="form-check-label">注入可用调度器列表</label>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mb-2">
+                <label class="form-label">别名 (用逗号分隔)</label>
+                <input type="text" class="form-control" name="param_aliases">
+            </div>
+        </div>
+    `;
+    targetContainer.appendChild(div);
+    
+    // 关闭模态框
+    const modal = bootstrap.Modal.getInstance(document.getElementById('paramSelectModal'));
+    modal.hide();
+}
+
+function removeParamConfig(button) {
+    button.closest('.param-config-item').remove();
+}
+
+function toggleParamConfig(button) {
+    const paramItem = button.closest('.param-config-item');
+    const content = paramItem.querySelector('.param-config-content');
+    const icon = button.querySelector('i');
+    
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        icon.className = 'bi bi-chevron-up';
+    } else {
+        content.style.display = 'none';
+        icon.className = 'bi bi-chevron-down';
+    }
+}
+
+function toggleSpecialFeatures(button) {
+    const paramItem = button.closest('.param-config-item');
+    if (!paramItem) {
+        console.error('无法找到 param-config-item 父元素');
+        return;
+    }
+    
+    let content = paramItem.querySelector('.special-features-content');
+    if (!content) {
+        console.error('无法找到 special-features-content 元素');
+        return;
+    }
+    
+    const icon = button.querySelector('i');
+    if (!icon) {
+        console.error('无法找到图标元素');
+        return;
+    }
+    
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        icon.classList.remove('bi-chevron-down');
+        icon.classList.add('bi-chevron-up');
+    } else {
+        content.style.display = 'none';
+        icon.classList.remove('bi-chevron-up');
+        icon.classList.add('bi-chevron-down');
+    }
+}
+
+function updateBooleanLabel(checkbox) {
+    const label = checkbox.parentElement.querySelector('.boolean-label');
+    if (label) {
+        label.textContent = checkbox.checked ? 'True' : 'False';
+    }
+}
 </script>
 {% endblock %}

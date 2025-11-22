@@ -495,7 +495,12 @@ const savedData = {
 };
 // 解析 Workflow JSON 中的节点
 function parseWorkflowNodes() {
-    const workflowJson = document.getElementById('workflowJson').value;
+    const workflowJsonElement = document.getElementById('workflowJson');
+    if (!workflowJsonElement) {
+        console.error('workflowJson element not found');
+        return;
+    }
+    const workflowJson = workflowJsonElement.value;
     if (!workflowJson.trim()) {
         console.log('Workflow JSON 为空，跳过解析');
         return;
@@ -670,8 +675,8 @@ function addInputNode() {
     list.appendChild(div);
     
     // 如果已经解析过节点，更新选择器
-    const workflowJson = document.getElementById('workflowJson').value;
-    if (workflowJson.trim()) {
+    const workflowJsonElement = document.getElementById('workflowJson');
+    if (workflowJsonElement && workflowJsonElement.value.trim()) {
         parseWorkflowNodes();
     }
     
@@ -700,8 +705,8 @@ function addOutputNode() {
     list.appendChild(div);
     
     // 如果已经解析过节点，更新选择器
-    const workflowJson = document.getElementById('workflowJson').value;
-    if (workflowJson.trim()) {
+    const workflowJsonElement = document.getElementById('workflowJson');
+    if (workflowJsonElement && workflowJsonElement.value.trim()) {
         parseWorkflowNodes();
     }
     
@@ -730,8 +735,8 @@ function addConfigurableNode() {
     list.appendChild(div);
     
     // 如果已经解析过节点，只更新新添加的选择器
-    const workflowJson = document.getElementById('workflowJson').value;
-    if (workflowJson.trim()) {
+    const workflowJsonElement = document.getElementById('workflowJson');
+    if (workflowJsonElement && workflowJsonElement.value.trim()) {
         try {
             const workflow = JSON.parse(workflowJson);
             const nodes = [];
@@ -778,18 +783,20 @@ function updateMappingPreview() {
         .filter(v => v);
     
     const inputPreview = document.getElementById('inputMappingsPreview');
-    if (inputNodes.length > 0) {
-        const inputMappings = {};
-        inputNodes.forEach(nodeId => {
-            inputMappings[nodeId] = {
-                parameter_name: "image",
-                type: "image",
-                description: "输入的原始图像"
-            };
-        });
-        inputPreview.innerHTML = `<pre><code>${JSON.stringify(inputMappings, null, 2)}</code></pre>`;
-    } else {
-        inputPreview.innerHTML = '<p class="text-muted">暂无输入节点</p>';
+    if (inputPreview) {
+        if (inputNodes.length > 0) {
+            const inputMappings = {};
+            inputNodes.forEach(nodeId => {
+                inputMappings[nodeId] = {
+                    parameter_name: "image",
+                    type: "image",
+                    description: "输入的原始图像"
+                };
+            });
+            inputPreview.innerHTML = `<pre><code>${JSON.stringify(inputMappings, null, 2)}</code></pre>`;
+        } else {
+            inputPreview.innerHTML = '<p class="text-muted">暂无输入节点</p>';
+        }
     }
     
     // 更新输出映射预览
@@ -798,18 +805,20 @@ function updateMappingPreview() {
         .filter(v => v);
     
     const outputPreview = document.getElementById('outputMappingsPreview');
-    if (outputNodes.length > 0) {
-        const outputMappings = {};
-        outputNodes.forEach(nodeId => {
-            outputMappings[nodeId] = {
-                parameter_name: "images",
-                type: "image",
-                description: "处理后的图像"
-            };
-        });
-        outputPreview.innerHTML = `<pre><code>${JSON.stringify(outputMappings, null, 2)}</code></pre>`;
-    } else {
-        outputPreview.innerHTML = '<p class="text-muted">暂无输出节点</p>';
+    if (outputPreview) {
+        if (outputNodes.length > 0) {
+            const outputMappings = {};
+            outputNodes.forEach(nodeId => {
+                outputMappings[nodeId] = {
+                    parameter_name: "images",
+                    type: "image",
+                    description: "处理后的图像"
+                };
+            });
+            outputPreview.innerHTML = `<pre><code>${JSON.stringify(outputMappings, null, 2)}</code></pre>`;
+        } else {
+            outputPreview.innerHTML = '<p class="text-muted">暂无输出节点</p>';
+        }
     }
 }
 
@@ -830,8 +839,9 @@ function toggleNodeConfig(button) {
 
 // 更新节点标题显示
 function updateNodeTitles() {
-    const workflowJson = document.getElementById('workflowJson').value;
-    if (!workflowJson.trim()) return;
+    const workflowJsonElement = document.getElementById('workflowJson');
+    if (!workflowJsonElement || !workflowJsonElement.value.trim()) return;
+    const workflowJson = workflowJsonElement.value;
     
     try {
         const workflow = JSON.parse(workflowJson);
@@ -1077,11 +1087,12 @@ function addParamConfig(button) {
     }
     
     // 解析工作流JSON获取该节点的inputs
-    const workflowJson = document.getElementById('workflowJson').value;
-    if (!workflowJson.trim()) {
+    const workflowJsonElement = document.getElementById('workflowJson');
+    if (!workflowJsonElement || !workflowJsonElement.value.trim()) {
         alert('请先解析工作流JSON');
         return;
     }
+    const workflowJson = workflowJsonElement.value;
     
     try {
         const workflow = JSON.parse(workflowJson);
@@ -1177,15 +1188,19 @@ function addParamConfig(button) {
 // 确认添加参数配置
 function confirmAddParamConfig(nodeId) {
     const select = document.getElementById('paramSelect');
-    const paramName = select.value;
-    
-    if (!paramName) {
+    if (!select || !select.value) {
         alert('请选择一个参数');
         return;
     }
+    const paramName = select.value;
     
     // 获取工作流数据以获取参数的默认值
-    const workflowJson = document.getElementById('workflowJson').value;
+    const workflowJsonElement = document.getElementById('workflowJson');
+    if (!workflowJsonElement) {
+        alert('无法找到工作流JSON元素');
+        return;
+    }
+    const workflowJson = workflowJsonElement.value;
     let defaultValue = '';
     let paramType = 'text';
     
@@ -1347,6 +1362,11 @@ function confirmAddParamConfig(nodeId) {
 function initParamTypeControls(paramItem) {
     const typeSelect = paramItem.querySelector('select[name="param_type"]');
     
+    if (!typeSelect) {
+        console.warn('param_type select not found in paramItem:', paramItem);
+        return;
+    }
+    
     // 监听类型变化
     typeSelect.addEventListener('change', function() {
         updateParamTypeDisplay(paramItem, this.value);
@@ -1365,40 +1385,43 @@ function updateParamTypeDisplay(paramItem, paramType) {
     const numberOptions = paramItem.querySelector('.param-number-options');
     const selectOptions = paramItem.querySelector('.param-select-options');
     
-    // 隐藏所有选项
-    defaultText.style.display = 'none';
-    defaultNumber.style.display = 'none';
-    defaultBoolean.style.display = 'none';
-    numberOptions.style.display = 'none';
-    selectOptions.style.display = 'none';
+    // 隐藏所有选项（检查元素是否存在）
+    if (defaultText) defaultText.style.display = 'none';
+    if (defaultNumber) defaultNumber.style.display = 'none';
+    if (defaultBoolean) defaultBoolean.style.display = 'none';
+    if (numberOptions) numberOptions.style.display = 'none';
+    if (selectOptions) selectOptions.style.display = 'none';
     
     // 根据类型显示相应选项
     switch(paramType) {
         case 'text':
-            defaultText.style.display = 'block';
+            if (defaultText) defaultText.style.display = 'block';
             break;
             
         case 'number':
-            defaultNumber.style.display = 'block';
-            numberOptions.style.display = 'block';
+            if (defaultNumber) defaultNumber.style.display = 'block';
+            if (numberOptions) numberOptions.style.display = 'block';
             break;
             
         case 'select':
-            defaultText.style.display = 'block';
-            selectOptions.style.display = 'block';
+            if (defaultText) defaultText.style.display = 'block';
+            if (selectOptions) selectOptions.style.display = 'block';
             break;
             
         case 'boolean':
-            defaultBoolean.style.display = 'block';
-            // 初始化布尔值标签显示
-            const checkbox = defaultBoolean.querySelector('input[type="checkbox"]');
-            updateBooleanLabel(checkbox);
+            if (defaultBoolean) {
+                defaultBoolean.style.display = 'block';
+                // 初始化布尔值标签显示
+                const checkbox = defaultBoolean.querySelector('input[type="checkbox"]');
+                if (checkbox) updateBooleanLabel(checkbox);
+            }
             break;
     }
 }
 
 // 更新布尔值开关的显示文字
 function updateBooleanLabel(checkbox) {
+    if (!checkbox) return;
     const label = checkbox.nextElementSibling;
     if (label && label.classList.contains('boolean-label')) {
         label.textContent = checkbox.checked ? 'True' : 'False';
@@ -1519,8 +1542,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // 等待一小段时间确保所有DOM元素都完全加载
     setTimeout(() => {
         // 自动解析 Workflow JSON 中的节点
-        const workflowJson = document.getElementById('workflowJson').value;
-        if (workflowJson.trim()) {
+        const workflowJsonElement = document.getElementById('workflowJson');
+        if (workflowJsonElement && workflowJsonElement.value.trim()) {
             parseWorkflowNodes();
             
             // 在节点解析完成后立即恢复已保存的值
@@ -1536,12 +1559,18 @@ document.addEventListener('DOMContentLoaded', function() {
 document.getElementById('workflowForm').addEventListener('submit', function(e) {
     e.preventDefault();
     
+    const nameInput = document.querySelector('input[name="name"]');
+    const prefixInput = document.querySelector('input[name="prefix"]');
+    const descriptionInput = document.querySelector('textarea[name="description"]');
+    const versionInput = document.querySelector('input[name="version"]');
+    const authorInput = document.querySelector('input[name="author"]');
+    
     const config = {
-        name: document.querySelector('input[name="name"]').value,
-        prefix: document.querySelector('input[name="prefix"]').value,
-        description: document.querySelector('textarea[name="description"]').value,
-        version: document.querySelector('input[name="version"]').value,
-        author: document.querySelector('input[name="author"]').value,
+        name: nameInput ? nameInput.value : '',
+        prefix: prefixInput ? prefixInput.value : '',
+        description: descriptionInput ? descriptionInput.value : '',
+        version: versionInput ? versionInput.value : '',
+        author: authorInput ? authorInput.value : '',
         input_nodes: Array.from(document.querySelectorAll('select[name="input_nodes"]')).map(select => select.value).filter(v => v),
         output_nodes: Array.from(document.querySelectorAll('select[name="output_nodes"]')).map(select => select.value).filter(v => v),
         configurable_nodes: Array.from(document.querySelectorAll('select[name="configurable_nodes"]')).map(select => select.value).filter(v => v),
@@ -1582,53 +1611,61 @@ document.getElementById('workflowForm').addEventListener('submit', function(e) {
         
         nodeItem.querySelectorAll('.param-config-item').forEach(paramItem => {
             const paramName = paramItem.getAttribute('data-param-name');
-            const paramType = paramItem.querySelector('select[name="param_type"]').value;
+            const paramTypeSelect = paramItem.querySelector('select[name="param_type"]');
+            const paramType = paramTypeSelect ? paramTypeSelect.value : 'text';
             
             // 根据类型获取默认值
             let defaultValue = null;
             switch(paramType) {
                 case 'boolean':
                     const checkbox = paramItem.querySelector('.param-default-boolean input[name="param_default"]');
-                    defaultValue = checkbox.checked;
+                    defaultValue = checkbox ? checkbox.checked : false;
                     break;
                 case 'number':
                     const numberInput = paramItem.querySelector('.param-default-number input[name="param_default"]');
-                    defaultValue = numberInput.value ? parseFloat(numberInput.value) : null;
+                    defaultValue = numberInput && numberInput.value ? parseFloat(numberInput.value) : null;
                     break;
                 default:
                     const textInput = paramItem.querySelector('.param-default-text input[name="param_default"]');
-                    defaultValue = textInput.value || null;
+                    defaultValue = textInput ? textInput.value || null : null;
             }
+            
+            const descriptionTextarea = paramItem.querySelector('textarea[name="param_description"]');
+            const requiredCheckbox = paramItem.querySelector('input[name="param_required"]');
+            const minInput = paramItem.querySelector('input[name="param_min"]');
+            const maxInput = paramItem.querySelector('input[name="param_max"]');
             
             const paramConfig = {
                 type: paramType,
                 default: defaultValue,
-                description: paramItem.querySelector('textarea[name="param_description"]').value || '',
-                required: paramItem.querySelector('input[name="param_required"]').checked
+                description: descriptionTextarea ? descriptionTextarea.value || '' : '',
+                required: requiredCheckbox ? requiredCheckbox.checked : false
             };
             
-            const minVal = paramItem.querySelector('input[name="param_min"]').value;
-            const maxVal = paramItem.querySelector('input[name="param_max"]').value;
+            const minVal = minInput ? minInput.value : '';
+            const maxVal = maxInput ? maxInput.value : '';
             if (minVal) paramConfig.min = parseFloat(minVal);
             if (maxVal) paramConfig.max = parseFloat(maxVal);
             
-            const options = paramItem.querySelector('input[name="param_options"]').value;
+            const optionsInput = paramItem.querySelector('input[name="param_options"]');
+            const options = optionsInput ? optionsInput.value : '';
             if (options) paramConfig.options = options.split(',').map(o => o.trim());
             
-            const aliases = paramItem.querySelector('input[name="param_aliases"]').value;
+            const aliasesInput = paramItem.querySelector('input[name="param_aliases"]');
+            const aliases = aliasesInput ? aliasesInput.value : '';
             if (aliases) paramConfig.aliases = aliases.split(',').map(a => a.trim());
             
             // 处理特殊功能
-            if (paramItem.querySelector('input[name="param_inject_models"]').checked) {
+            if (paramItem.querySelector('input[name="param_inject_models"]')?.checked) {
                 paramConfig.inject_models = true;
             }
-            if (paramItem.querySelector('input[name="param_inject_loras"]').checked) {
+            if (paramItem.querySelector('input[name="param_inject_loras"]')?.checked) {
                 paramConfig.inject_loras = true;
             }
-            if (paramItem.querySelector('input[name="param_inject_samplers"]').checked) {
+            if (paramItem.querySelector('input[name="param_inject_samplers"]')?.checked) {
                 paramConfig.inject_samplers = true;
             }
-            if (paramItem.querySelector('input[name="param_inject_schedulers"]').checked) {
+            if (paramItem.querySelector('input[name="param_inject_schedulers"]')?.checked) {
                 paramConfig.inject_schedulers = true;
             }
             
@@ -1636,7 +1673,10 @@ document.getElementById('workflowForm').addEventListener('submit', function(e) {
         });
     });
     
-    document.getElementById('configInput').value = JSON.stringify(config, null, 2);
+    const configInput = document.getElementById('configInput');
+    if (configInput) {
+        configInput.value = JSON.stringify(config, null, 2);
+    }
     
     // 提交表单
     this.submit();
