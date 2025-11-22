@@ -642,4 +642,4 @@ if __name__ == '__main__':
     print(f"🌐 访问地址: http://localhost:7777")
     print("=" * 50)
     
-    app.run(host='0.0.0.0', port=7777, debug=True)
+    app.run(port=7777, debug=False)
