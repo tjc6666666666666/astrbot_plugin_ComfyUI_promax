@@ -243,7 +243,7 @@ class ModComfyUI(Star):
             logger.info(f"消息内容检查: has_non_text={has_non_text}")
             
             if isinstance(event, AiocqhttpMessageEvent) and not has_non_text:
-                # 使用 bot 的直接发送方法
+                # QQ 平台：使用 bot 的直接发送方法获取消息ID进行撤回
                 client = event.bot
                 
                 # 获取发送者和群组信息
@@ -275,7 +275,12 @@ class ModComfyUI(Star):
                 asyncio.create_task(self._delayed_recall(event, result))
                 return result
             else:
-                logger.warning(f"事件类型不是 AiocqhttpMessageEvent: {type(event)} 或包含非文本内容，使用普通发送")
+                # 非 QQ 平台或包含非文本内容：使用通用发送方式
+                if not isinstance(event, AiocqhttpMessageEvent):
+                    logger.info(f"非 QQ 平台事件类型: {type(event)}，使用通用发送方式（不支持自动撤回）")
+                else:
+                    logger.info("消息包含非文本内容，使用通用发送方式（不支持自动撤回）")
+                
                 await event.send(message_content)
                 return None
                 
@@ -2951,6 +2956,12 @@ class ModComfyUI(Star):
     async def _upload_zip_file(self, event: AstrMessageEvent, zip_path: str) -> bool:
         """上传压缩包到群文件或个人文件"""
         try:
+            # 检查是否为QQ平台
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+            if not isinstance(event, AiocqhttpMessageEvent):
+                logger.info("非QQ平台不支持文件上传功能")
+                return False
+            
             # 获取群ID和发送者QQ号
             group_id = event.get_group_id()
             sender_qq = event.get_sender_id()
@@ -2958,8 +2969,6 @@ class ModComfyUI(Star):
             zip_filename = os.path.basename(zip_path)
             
             if group_id:  # 群聊场景
-                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-                assert isinstance(event, AiocqhttpMessageEvent)
                 client = event.bot
                 await client.upload_group_file(
                     group_id=group_id,
@@ -2968,8 +2977,6 @@ class ModComfyUI(Star):
                 )
                 logger.info(f"压缩包已上传到群文件: 群ID={group_id}, 文件={zip_filename}")
             else:  # 私聊场景
-                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-                assert isinstance(event, AiocqhttpMessageEvent)
                 client = event.bot
                 await client.upload_private_file(
                     user_id=int(sender_qq),
@@ -3070,9 +3077,18 @@ class ModComfyUI(Star):
                         f"💡 提示: 请从群文件或私聊文件中下载"
                     ))
                 else:
-                    await self._send_with_auto_recall(event, event.plain_result(
-                        "❌ 压缩包上传失败，请稍后重试！"
-                    ))
+                    # 检查是否为平台不支持
+                    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+                    if not isinstance(event, AiocqhttpMessageEvent):
+                        await self._send_with_auto_recall(event, event.plain_result(
+                            "❌ 当前平台不支持文件上传功能！\n"
+                            "📱 压缩包上传仅支持QQ平台\n"
+                            "💡 如需获取图片，请使用QQ平台发送此指令"
+                        ))
+                    else:
+                        await self._send_with_auto_recall(event, event.plain_result(
+                            "❌ 压缩包上传失败，请稍后重试！"
+                        ))
             
             finally:
                 # 确保临时压缩包被清理
