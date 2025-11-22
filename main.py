@@ -22,6 +22,7 @@ import socket
 import sqlite3
 import zipfile
 import shutil
+import aiosqlite
 
 import io
 import base64
@@ -163,21 +164,20 @@ class ModComfyUI(Star):
         self._validate_config()
         
         # 4. 初始化数据库
-        self._init_database()
+        asyncio.create_task(self._init_database())
         
         # 启动ComfyUI服务器监控（将在监控中启动worker）
         self.server_monitor_task = asyncio.create_task(self._start_server_monitor())
 
-    def _init_database(self) -> None:
+    async def _init_database(self) -> None:
         """初始化用户下载记录数据库"""
         try:
             # 确保数据库目录存在
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
+            async with aiosqlite.connect(self.db_path) as conn:
                 # 创建用户下载记录表
-                cursor.execute('''
+                await conn.execute('''
                     CREATE TABLE IF NOT EXISTS user_downloads (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id TEXT NOT NULL,
@@ -190,7 +190,7 @@ class ModComfyUI(Star):
                 ''')
                 
                 # 创建图片生成记录表（用于记录图片的生成者）
-                cursor.execute('''
+                await conn.execute('''
                     CREATE TABLE IF NOT EXISTS image_records (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         filename TEXT NOT NULL,
@@ -200,30 +200,29 @@ class ModComfyUI(Star):
                     )
                 ''')
                 
-                conn.commit()
+                await conn.commit()
                 logger.info(f"数据库初始化完成: {self.db_path}")
         except Exception as e:
             logger.error(f"数据库初始化失败: {e}")
 
-    def _check_download_limit(self, user_id: str) -> Tuple[bool, int]:
+    async def _check_download_limit(self, user_id: str) -> Tuple[bool, int]:
         """检查用户今日下载次数限制"""
         try:
             today = datetime.now().strftime("%Y-%m-%d")
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
+            async with aiosqlite.connect(self.db_path) as conn:
                 # 查询或插入用户今日下载记录
-                cursor.execute('''
+                await conn.execute('''
                     INSERT OR IGNORE INTO user_downloads (user_id, download_date, download_count)
                     VALUES (?, ?, 0)
                 ''', (user_id, today))
                 
                 # 查询当前下载次数
-                cursor.execute('''
+                cursor = await conn.execute('''
                     SELECT download_count FROM user_downloads
                     WHERE user_id = ? AND download_date = ?
                 ''', (user_id, today))
                 
-                result = cursor.fetchone()
+                result = await cursor.fetchone()
                 current_count = result[0] if result else 0
                 
                 # 检查是否超过限制
@@ -233,46 +232,43 @@ class ModComfyUI(Star):
             logger.error(f"检查下载限制失败: {e}")
             return False, 0
 
-    def _increment_download_count(self, user_id: str) -> None:
+    async def _increment_download_count(self, user_id: str) -> None:
         """增加用户下载次数"""
         try:
             today = datetime.now().strftime("%Y-%m-%d")
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
+            async with aiosqlite.connect(self.db_path) as conn:
+                await conn.execute('''
                     UPDATE user_downloads 
                     SET download_count = download_count + 1, updated_at = CURRENT_TIMESTAMP
                     WHERE user_id = ? AND download_date = ?
                 ''', (user_id, today))
-                conn.commit()
+                await conn.commit()
         except Exception as e:
             logger.error(f"更新下载次数失败: {e}")
 
-    def _record_image_generation(self, filename: str, user_id: str) -> None:
+    async def _record_image_generation(self, filename: str, user_id: str) -> None:
         """记录图片生成信息"""
         try:
             today = datetime.now().strftime("%Y-%m-%d")
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
+            async with aiosqlite.connect(self.db_path) as conn:
+                await conn.execute('''
                     INSERT INTO image_records (filename, user_id, generate_date)
                     VALUES (?, ?, ?)
                 ''', (filename, user_id, today))
-                conn.commit()
+                await conn.commit()
         except Exception as e:
             logger.error(f"记录图片生成信息失败: {e}")
 
-    def _get_user_images_today(self, user_id: str) -> List[str]:
+    async def _get_user_images_today(self, user_id: str) -> List[str]:
         """获取用户今日生成的图片列表"""
         try:
             today = datetime.now().strftime("%Y-%m-%d")
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
+            async with aiosqlite.connect(self.db_path) as conn:
+                cursor = await conn.execute('''
                     SELECT filename FROM image_records
                     WHERE user_id = ? AND generate_date = ?
                 ''', (user_id, today))
-                return [row[0] for row in cursor.fetchall()]
+                return [row[0] for row in await cursor.fetchall()]
         except Exception as e:
             logger.error(f"获取用户图片列表失败: {e}")
             return []
@@ -492,8 +488,12 @@ class ModComfyUI(Star):
             if image_data:
                 # 保存图片到缓存
                 os.makedirs(workflow_dir, exist_ok=True)
-                with open(help_image_path, 'wb') as f:
-                    f.write(image_data)
+                def write_help_image():
+                    with open(help_image_path, 'wb') as f:
+                        f.write(image_data)
+                
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, write_help_image)
                 
                 # 发送图片，传递文件路径
                 await event.send(event.image_result(help_image_path))
@@ -1628,15 +1628,19 @@ class ModComfyUI(Star):
             saved_filename = timestamp + original_name
             save_path = save_dir / saved_filename
             
-            # 保存图片
-            with open(save_path, 'wb') as f:
-                f.write(image_data)
+            # 保存图片 - 使用异步文件写入
+            def write_image_file():
+                with open(save_path, 'wb') as f:
+                    f.write(image_data)
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, write_image_file)
             
             logger.info(f"图片已自动保存: {save_path}")
             
             # 记录图片生成信息
             if user_id:
-                self._record_image_generation(saved_filename, user_id)
+                asyncio.create_task(self._record_image_generation(saved_filename, user_id))
             
         except Exception as e:
             logger.error(f"自动保存图片失败: {str(e)}")
@@ -1645,8 +1649,16 @@ class ModComfyUI(Star):
         url = f"{server.url}/upload/image"
         if not os.path.exists(img_path):
             raise Exception(f"图片文件不存在：{img_path}")
-        with open(img_path, "rb") as f:
-            img_data = f.read()
+        
+        # 使用异步文件读取
+        def read_image_file():
+            with open(img_path, "rb") as f:
+                return f.read()
+        
+        # 在线程池中执行文件读取
+        loop = asyncio.get_event_loop()
+        img_data = await loop.run_in_executor(None, read_image_file)
+        
         form_data = aiohttp.FormData()
         form_data.add_field("image", img_data, filename=os.path.basename(img_path), content_type="image/*")
         async with aiohttp.ClientSession() as session:
@@ -1792,28 +1804,30 @@ class ModComfyUI(Star):
             + lora_feedback
         ))
 
-    def _is_port_available(self, port: int) -> bool:
+    async def _is_port_available(self, port: int) -> bool:
         """检查端口是否可用"""
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1)
-                result = s.connect_ex(('localhost', port))
-                return result != 0
-        except:
+            future = asyncio.open_connection('localhost', port)
+            _, writer = await asyncio.wait_for(future, timeout=1.0)
+            writer.close()
+            await writer.wait_closed()
+            return False  # 连接成功，端口被占用
+        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
+            return True  # 连接失败，端口可用
+        except Exception:
             return False
 
-    def _find_available_port(self, start_port: int) -> int:
+    async def _find_available_port(self, start_port: int) -> int:
         """从指定端口开始查找可用端口"""
         port = start_port
         max_attempts = 100  # 最多尝试100个端口
         
         for _ in range(max_attempts):
-            if self._is_port_available(port):
+            if await self._is_port_available(port):
                 return port
             port += 1
         
         # 如果都不可用，随机选择一个高端口
-        import random
         return random.randint(49152, 65535)
 
     async def _start_help_server(self) -> str:
@@ -1822,7 +1836,7 @@ class ModComfyUI(Star):
             return f"http://localhost:{self.actual_help_port}"
         
         # 查找可用端口
-        self.actual_help_port = self._find_available_port(self.help_server_port)
+        self.actual_help_port = await self._find_available_port(self.help_server_port)
         
         # 生成动态HTML内容
         def generate_help_html():
@@ -2303,10 +2317,15 @@ class ModComfyUI(Star):
             except Exception as e:
                 logger.error(f"添加Astrbot.png到帮助图片失败: {e}")
             
-            # 保存图片
+            # 保存图片 - 使用线程池避免阻塞
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             image_path = os.path.join(os.path.dirname(__file__), f"help_{timestamp}.png")
-            image.save(image_path, 'PNG', quality=95)
+            
+            def save_image():
+                image.save(image_path, 'PNG', quality=95)
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, save_image)
             
             logger.info(f"帮助图片已生成: {image_path}")
             return image_path
@@ -2333,7 +2352,12 @@ class ModComfyUI(Star):
                 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 image_path = os.path.join(os.path.dirname(__file__), f"help_error_{timestamp}.png")
-                image.save(image_path, 'PNG')
+                
+                def save_error_image():
+                    image.save(image_path, 'PNG')
+                
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, save_error_image)
                 
                 return image_path
             except Exception as e2:
@@ -2348,29 +2372,39 @@ class ModComfyUI(Star):
             # 启动临时服务器
             server_url = await self._start_help_server()
             
-            # 转换HTML为图片
-            image_path = await self._html_to_image(server_url)
-            
-            # 发送图片
-            await event.send(event.image_result(image_path))
-            
-            # 延迟清理临时图片（确保发送完成）
-            await asyncio.sleep(2)
             try:
+                # 转换HTML为图片
+                image_path = await self._html_to_image(server_url)
+                
+                # 发送图片
+                await event.send(event.image_result(image_path))
+                
+                # 延迟清理临时图片（确保发送完成）
+                await asyncio.sleep(2)
+                
+            finally:
+                # 确保临时图片被清理
                 if image_path and os.path.exists(image_path):
-                    os.remove(image_path)
-                    logger.info(f"临时图片已清理: {image_path}")
-            except Exception as e:
-                logger.warning(f"清理临时图片失败: {e}")
+                    try:
+                        def remove_file():
+                            os.remove(image_path)
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(None, remove_file)
+                        logger.info(f"临时图片已清理: {image_path}")
+                    except Exception as e:
+                        logger.warning(f"清理临时图片失败: {e}")
                 
         except Exception as e:
             logger.error(f"发送帮助图片失败: {e}")
             # 如果发送图片失败，发送文本形式的帮助
             await self._send_help_as_text(event)
         finally:
-            # 立即销毁服务器
+            # 确保服务器被销毁
             if server_url:
-                await self._stop_help_server()
+                try:
+                    await self._stop_help_server()
+                except Exception as e:
+                    logger.warning(f"停止帮助服务器失败: {e}")
 
     async def _send_help_as_text(self, event: AstrMessageEvent) -> None:
         """发送帮助信息为文本形式"""
@@ -2536,7 +2570,7 @@ class ModComfyUI(Star):
         except Exception as e:
             logger.error(f"停止帮助服务器失败: {e}")
 
-    def _get_today_images(self, user_id: Optional[str] = None) -> List[str]:
+    async def _get_today_images(self, user_id: Optional[str] = None) -> List[str]:
         """获取今天的图片文件列表"""
         try:
             now = datetime.now()
@@ -2557,7 +2591,7 @@ class ModComfyUI(Star):
             
             # 如果设置了只能获取自己的图片，则过滤
             if self.only_own_images and user_id:
-                user_images = set(self._get_user_images_today(user_id))
+                user_images = set(await self._get_user_images_today(user_id))
                 image_files = [f for f in image_files if f.name in user_images]
             
             return [str(f) for f in image_files]
@@ -2583,13 +2617,17 @@ class ModComfyUI(Star):
             else:
                 zip_path = Path(os.path.dirname(__file__)) / self.auto_save_dir / zip_filename
             
-            # 创建压缩包
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for image_file in image_files:
-                    if os.path.exists(image_file):
-                        # 使用文件名作为压缩包内的路径
-                        arcname = os.path.basename(image_file)
-                        zipf.write(image_file, arcname)
+            # 创建压缩包 - 使用线程池避免阻塞
+            def create_zip():
+                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for image_file in image_files:
+                        if os.path.exists(image_file):
+                            # 使用文件名作为压缩包内的路径
+                            arcname = os.path.basename(image_file)
+                            zipf.write(image_file, arcname)
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, create_zip)
             
             logger.info(f"压缩包创建成功: {zip_path}")
             return str(zip_path)
@@ -2666,7 +2704,7 @@ class ModComfyUI(Star):
             user_id = str(event.get_sender_id())
             
             # 检查下载次数限制
-            can_download, current_count = self._check_download_limit(user_id)
+            can_download, current_count = await self._check_download_limit(user_id)
             if not can_download:
                 await event.send(event.plain_result(
                     f"❌ 今日下载次数已达上限！\n"
@@ -2678,7 +2716,7 @@ class ModComfyUI(Star):
             
             # 获取今天的图片
             await event.send(event.plain_result("🔍 正在搜索今天的图片..."))
-            image_files = self._get_today_images(user_id)
+            image_files = await self._get_today_images(user_id)
             
             if not image_files:
                 await event.send(event.plain_result(
@@ -2697,38 +2735,45 @@ class ModComfyUI(Star):
                 ))
                 return
             
-            await event.send(event.plain_result("📦 压缩包创建完成，正在上传..."))
+            # 使用 try-finally 确保压缩包被清理
+            try:
+                await event.send(event.plain_result("📦 压缩包创建完成，正在上传..."))
+                
+                # 上传压缩包
+                upload_success = await self._upload_zip_file(event, zip_path)
+                
+                if upload_success:
+                    # 更新下载次数
+                    await self._increment_download_count(user_id)
+                    
+                    # 获取更新后的下载次数
+                    _, new_count = await self._check_download_limit(user_id)
+                    
+                    await event.send(event.plain_result(
+                        f"✅ 压缩包上传成功！\n"
+                        f"📁 文件名: {os.path.basename(zip_path)}\n"
+                        f"📊 包含图片: {len(image_files)} 张\n"
+                        f"📈 今日已下载: {new_count}/{self.daily_download_limit} 次\n"
+                        f"💡 提示: 请从群文件或私聊文件中下载"
+                    ))
+                else:
+                    await event.send(event.plain_result(
+                        "❌ 压缩包上传失败，请稍后重试！"
+                    ))
             
-            # 上传压缩包
-            upload_success = await self._upload_zip_file(event, zip_path)
-            
-            if upload_success:
-                # 更新下载次数
-                self._increment_download_count(user_id)
-                
-                # 获取更新后的下载次数
-                _, new_count = self._check_download_limit(user_id)
-                
-                await event.send(event.plain_result(
-                    f"✅ 压缩包上传成功！\n"
-                    f"📁 文件名: {os.path.basename(zip_path)}\n"
-                    f"📊 包含图片: {len(image_files)} 张\n"
-                    f"📈 今日已下载: {new_count}/{self.daily_download_limit} 次\n"
-                    f"💡 提示: 请从群文件或私聊文件中下载"
-                ))
-                
-                # 延迟删除临时压缩包
-                await asyncio.sleep(5)
-                try:
-                    if os.path.exists(zip_path):
-                        os.remove(zip_path)
+            finally:
+                # 确保临时压缩包被清理
+                if zip_path and os.path.exists(zip_path):
+                    try:
+                        # 延迟删除，确保上传完成
+                        await asyncio.sleep(5)
+                        def remove_zip():
+                            os.remove(zip_path)
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(None, remove_zip)
                         logger.info(f"临时压缩包已清理: {zip_path}")
-                except Exception as e:
-                    logger.warning(f"清理临时压缩包失败: {e}")
-            else:
-                await event.send(event.plain_result(
-                    "❌ 压缩包上传失败，请稍后重试！"
-                ))
+                    except Exception as e:
+                        logger.warning(f"清理临时压缩包失败: {e}")
                 
         except Exception as e:
             logger.error(f"处理输出压缩包指令失败: {e}")
@@ -2736,23 +2781,84 @@ class ModComfyUI(Star):
                 "❌ 处理请求时发生错误，请稍后重试！"
             ))
 
-    def __del__(self):
-        """析构函数，确保资源清理"""
+    async def cleanup_temp_files(self) -> None:
+        """清理临时文件"""
         try:
-            # 清理临时图片文件
             import glob
             temp_files = glob.glob(os.path.join(os.path.dirname(__file__), "help_*.png"))
-            for temp_file in temp_files:
+            zip_files = glob.glob(os.path.join(os.path.dirname(__file__), "comfyui_images_*.zip"))
+            
+            # 使用线程池并行删除文件
+            def remove_file(filepath):
                 try:
-                    os.remove(temp_file)
-                except:
+                    os.remove(filepath)
+                    if filepath.endswith('.png'):
+                        logger.debug(f"清理临时图片: {filepath}")
+                    else:
+                        logger.debug(f"清理临时压缩包: {filepath}")
+                except Exception as e:
+                    if filepath.endswith('.png'):
+                        logger.warning(f"清理临时图片失败 {filepath}: {e}")
+                    else:
+                        logger.warning(f"清理临时压缩包失败 {filepath}: {e}")
+            
+            loop = asyncio.get_event_loop()
+            tasks = []
+            
+            for temp_file in temp_files:
+                tasks.append(loop.run_in_executor(None, remove_file, temp_file))
+            
+            for zip_file in zip_files:
+                tasks.append(loop.run_in_executor(None, remove_file, zip_file))
+            
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+                
+        except Exception as e:
+            logger.error(f"清理临时文件时发生错误: {e}")
+
+    async def cleanup(self) -> None:
+        """显式清理资源"""
+        try:
+            # 停止服务器监控
+            if self.server_monitor_task and not self.server_monitor_task.done():
+                self.server_monitor_task.cancel()
+                try:
+                    await self.server_monitor_task
+                except asyncio.CancelledError:
                     pass
             
-            # 清理临时压缩包文件
+            # 停止所有服务器worker
+            for server in self.comfyui_servers:
+                if server.worker and not server.worker.done():
+                    server.worker.cancel()
+                    try:
+                        await server.worker
+                    except asyncio.CancelledError:
+                        pass
+                    server.worker = None
+            
+            # 停止帮助服务器
+            await self._stop_help_server()
+            
+            # 清理临时文件
+            await self.cleanup_temp_files()
+            
+            logger.info("资源清理完成")
+        except Exception as e:
+            logger.error(f"资源清理时发生错误: {e}")
+
+    def __del__(self):
+        """析构函数 - 仅作为最后的保障"""
+        try:
+            # 同步版本的临时文件清理，用于析构函数
+            import glob
+            temp_files = glob.glob(os.path.join(os.path.dirname(__file__), "help_*.png"))
             zip_files = glob.glob(os.path.join(os.path.dirname(__file__), "comfyui_images_*.zip"))
-            for zip_file in zip_files:
+            
+            for temp_file in temp_files + zip_files:
                 try:
-                    os.remove(zip_file)
+                    os.remove(temp_file)
                 except:
                     pass
         except:
@@ -3139,6 +3245,13 @@ class ModComfyUI(Star):
                 await event.send(event.plain_result(f"缺少必需的参数：{param_list}"))
                 return
 
+            # 验证参数值的有效性
+            validation_errors = self._validate_param_values(config, params)
+            if validation_errors:
+                error_msg = "\n".join(validation_errors)
+                await event.send(event.plain_result(f"参数输入有误：\n{error_msg}"))
+                return
+
             # 获取图片输入（如果需要）
             images = []
             messages = event.get_messages()
@@ -3327,6 +3440,74 @@ class ModComfyUI(Star):
                         missing_params.append(display_name)
         
         return missing_params
+
+    def _validate_param_values(self, config: Dict[str, Any], params: Dict[str, Any]) -> List[str]:
+        """验证参数值的有效性，包括范围、选项等"""
+        errors = []
+        node_configs = config.get("node_configs", {})
+        
+        # 验证每个提供的参数
+        for provided_key, value in params.items():
+            # 检查是否是 node_id:param_name 格式
+            if ":" in provided_key:
+                node_id, param_name = provided_key.split(":", 1)
+            else:
+                # 如果不是这种格式，跳过验证（这是未知参数）
+                continue
+            
+            # 获取参数配置
+            param_info = node_configs.get(node_id, {}).get(param_name, {})
+            if not param_info:
+                continue  # 没有找到参数配置，跳过验证
+            
+            param_type = param_info.get("type")
+            
+            # 获取参数的显示名称（优先使用第一个别名）
+            display_name = param_name
+            aliases = param_info.get("aliases", [])
+            if aliases:
+                display_name = aliases[0]
+            
+            try:
+                # 根据参数类型进行验证
+                if param_type == "number":
+                    # 尝试转换为数字
+                    try:
+                        num_value = float(value)
+                    except (ValueError, TypeError):
+                        errors.append(f"参数「{display_name}」必须是数字，当前值：{value}")
+                        continue
+                    
+                    # 检查最小值
+                    min_val = param_info.get("min")
+                    if min_val is not None and num_value < min_val:
+                        errors.append(f"参数「{display_name}」不能小于 {min_val}，当前值：{num_value}")
+                    
+                    # 检查最大值
+                    max_val = param_info.get("max")
+                    if max_val is not None and num_value > max_val:
+                        errors.append(f"参数「{display_name}」不能大于 {max_val}，当前值：{num_value}")
+                
+                elif param_type == "select":
+                    # 检查是否在选项列表中
+                    options = param_info.get("options", [])
+                    if options and value not in options:
+                        options_str = "、".join(options)
+                        errors.append(f"参数「{display_name}」必须是以下选项之一：{options_str}，当前值：{value}")
+                
+                elif param_type == "boolean":
+                    # 检查布尔值
+                    if isinstance(value, str):
+                        lower_value = value.lower()
+                        if lower_value not in ["true", "false", "1", "0", "yes", "no", "on", "off"]:
+                            errors.append(f"参数「{display_name}」必须是布尔值（true/false、1/0、yes/no、on/off），当前值：{value}")
+                    elif not isinstance(value, bool):
+                        errors.append(f"参数「{display_name}」必须是布尔值，当前值：{value}")
+            
+            except Exception as e:
+                errors.append(f"验证参数「{display_name}」时出错：{str(e)}")
+        
+        return errors
 
     def _build_workflow(self, workflow_data: Dict[str, Any], config: Dict[str, Any], 
                        params: Dict[str, Any], images: List[str]) -> Dict[str, Any]:
