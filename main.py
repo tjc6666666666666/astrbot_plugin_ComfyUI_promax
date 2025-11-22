@@ -3128,6 +3128,9 @@ class ModComfyUI(Star):
                     logger.error(f"加载workflow {workflow_name} 失败: {e}")
 
             logger.info(f"共加载 {len(self.workflows)} 个workflow模块")
+            
+            # 更新 WorkflowFilter 的前缀集合，避免每次文件系统访问
+            self.WorkflowFilter.update_prefixes(self.workflow_prefixes)
 
         except Exception as e:
             logger.error(f"加载workflow模块失败: {e}")
@@ -3193,6 +3196,14 @@ class ModComfyUI(Star):
             logger.error(f"为workflow {workflow_name} 注入主程序配置失败: {e}")
 
     class WorkflowFilter(CustomFilter):
+        # 类变量，存储所有前缀
+        _prefixes_set = set()
+
+        @classmethod
+        def update_prefixes(cls, prefixes_dict):
+            """更新前缀集合"""
+            cls._prefixes_set = set(prefixes_dict.keys())
+
         def filter(self, event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
             full_text = event.message_obj.message_str.strip()
             if not full_text:
@@ -3205,55 +3216,8 @@ class ModComfyUI(Star):
             
             prefix = words[0]
             
-            # 检查是否是workflow help命令格式：前缀 help
-            if len(words) >= 2 and words[1].lower() == "help":
-                # 检查前缀是否是有效的workflow前缀
-                workflow_dir = os.path.join(os.path.dirname(__file__), "workflow")
-                if not os.path.exists(workflow_dir):
-                    return False
-                
-                for workflow_name in os.listdir(workflow_dir):
-                    workflow_path = os.path.join(workflow_dir, workflow_name)
-                    if not os.path.isdir(workflow_path):
-                        continue
-                    
-                    config_file = os.path.join(workflow_path, "config.json")
-                    if not os.path.exists(config_file):
-                        continue
-                    
-                    try:
-                        with open(config_file, 'r', encoding='utf-8') as f:
-                            config = json.load(f)
-                        
-                        if config.get("prefix") == prefix:
-                            return True
-                    except Exception:
-                        continue
-            
-            # 直接从workflow目录检查前缀是否存在
-            workflow_dir = os.path.join(os.path.dirname(__file__), "workflow")
-            if not os.path.exists(workflow_dir):
-                return False
-            
-            for workflow_name in os.listdir(workflow_dir):
-                workflow_path = os.path.join(workflow_dir, workflow_name)
-                if not os.path.isdir(workflow_path):
-                    continue
-                
-                config_file = os.path.join(workflow_path, "config.json")
-                if not os.path.exists(config_file):
-                    continue
-                
-                try:
-                    with open(config_file, 'r', encoding='utf-8') as f:
-                        config = json.load(f)
-                    
-                    if config.get("prefix") == prefix:
-                        return True
-                except Exception:
-                    continue
-            
-            return False
+            # 直接从类变量中检查前缀是否存在，高效且无阻塞
+            return prefix in self._prefixes_set
 
     @filter.custom_filter(WorkflowFilter)
     async def handle_workflow(self, event: AstrMessageEvent):
