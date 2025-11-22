@@ -158,6 +158,13 @@ class ModComfyUI(Star):
 
         # 用户队列限制配置
         self.max_concurrent_tasks_per_user = config.get("max_concurrent_tasks_per_user", 3)
+        
+        # 主动撤回配置
+        self.enable_auto_recall = config.get("enable_auto_recall", False)
+        self.auto_recall_delay = config.get("auto_recall_delay", 20)
+        
+        # 调试信息
+        logger.info(f"主动撤回配置: 启用={self.enable_auto_recall}, 延迟={self.auto_recall_delay}秒")
 
         # Workflow模块配置
         self.workflow_dir = os.path.join(os.path.dirname(__file__), "workflow")
@@ -204,6 +211,253 @@ class ModComfyUI(Star):
         else:
             # 路径不存在，直接创建目录
             os.makedirs(dir_path_str, exist_ok=True)
+
+    async def _send_with_auto_recall(self, event: AstrMessageEvent, message_content: Any) -> Optional[int]:
+        """发送消息并根据配置自动撤回（仅撤回文本消息）"""
+        logger.info(f"发送消息: enable_auto_recall={self.enable_auto_recall}")
+        
+        if not self.enable_auto_recall:
+            # 如果未启用自动撤回，直接发送消息
+            await event.send(message_content)
+            return None
+        
+        # 检查要发送的消息内容是否包含图片或文件
+        has_non_text = False
+        if hasattr(message_content, '__iter__') and not isinstance(message_content, str):
+            # 如果是消息链，检查是否包含图片或文件
+            try:
+                for component in message_content:
+                    if hasattr(component, '__class__'):
+                        class_name = component.__class__.__name__
+                        if 'Image' in class_name or 'File' in class_name:
+                            has_non_text = True
+                            break
+            except Exception:
+                # 如果检查失败，保守处理，不撤回
+                has_non_text = True
+        
+        # 尝试使用 AiocqhttpMessageEvent 的直接发送方法来获取消息ID
+        try:
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+            logger.info(f"事件类型检查: {type(event)}, 是否为 AiocqhttpMessageEvent: {isinstance(event, AiocqhttpMessageEvent)}")
+            logger.info(f"消息内容检查: has_non_text={has_non_text}")
+            
+            if isinstance(event, AiocqhttpMessageEvent) and not has_non_text:
+                # 使用 bot 的直接发送方法
+                client = event.bot
+                
+                # 获取发送者和群组信息
+                group_id = event.get_group_id() if event.get_group_id() else None
+                user_id = event.get_sender_id()
+                logger.info(f"发送信息: group_id={group_id}, user_id={user_id}")
+                
+                # 准备消息 - 需要转换为 CQ 码格式
+                message_to_send = self._convert_to_cq_code(message_content)
+                logger.info(f"转换后的消息: {message_to_send}")
+                
+                # 检查转换是否成功
+                if not message_to_send or message_to_send.strip() == "":
+                    logger.warning("消息转换失败或结果为空，回退到普通发送方式")
+                    await event.send(message_content)
+                    return None
+                
+                # 发送消息并获取消息ID
+                if group_id:
+                    # 群聊消息
+                    result = await client.send_group_msg(group_id=int(group_id), message=message_to_send)
+                else:
+                    # 私聊消息
+                    result = await client.send_private_msg(user_id=int(user_id), message=message_to_send)
+                
+                logger.info(f"直接发送消息返回结果: {type(result)}, 内容: {result}")
+                
+                # 创建延迟撤回任务
+                asyncio.create_task(self._delayed_recall(event, result))
+                return result
+            else:
+                logger.warning(f"事件类型不是 AiocqhttpMessageEvent: {type(event)} 或包含非文本内容，使用普通发送")
+                await event.send(message_content)
+                return None
+                
+        except Exception as e:
+            import traceback
+            logger.warning(f"使用直接发送方法失败，回退到普通发送: {e}")
+            logger.warning(f"详细错误信息: {traceback.format_exc()}")
+            await event.send(message_content)
+            return None
+
+    def _convert_to_cq_code(self, message_content: Any) -> str:
+        """将 AstrBot 消息组件转换为 CQ 码格式"""
+        logger.info(f"开始转换消息内容: {type(message_content)}")
+        
+        # 如果是字符串，直接返回
+        if isinstance(message_content, str):
+            logger.info(f"消息内容是字符串: {message_content}")
+            return message_content.strip()  # 去除首尾空白字符
+        
+        # 尝试多种方式提取文本内容
+        text_result = ""
+        
+        # 方法1: 检查是否有 message 属性，并且是可调用的方法
+        if hasattr(message_content, 'message'):
+            msg_attr = getattr(message_content, 'message')
+            logger.info(f"检查 message 属性: {type(msg_attr)}, 是否可调用: {callable(msg_attr)}")
+            
+            if callable(msg_attr):
+                # 如果是方法，调用它
+                try:
+                    msg_content = msg_attr()
+                    logger.info(f"调用 message 方法后获取内容: {type(msg_content)}")
+                    text_result = self._extract_text_from_content(msg_content)
+                    if text_result:
+                        logger.info(f"从调用 message 方法提取的文本: {text_result}")
+                        return text_result.strip()  # 去除首尾空白字符
+                except Exception as e:
+                    logger.warning(f"调用 message 方法失败: {e}")
+            else:
+                # 如果是属性，直接使用
+                msg_content = msg_attr
+                logger.info(f"通过 message 属性获取内容: {type(msg_content)}")
+                text_result = self._extract_text_from_content(msg_content)
+                if text_result:
+                    logger.info(f"从 message 属性提取的文本: {text_result}")
+                    return text_result.strip()  # 去除首尾空白字符
+        
+        # 方法2: 检查是否有 chain 属性
+        if hasattr(message_content, 'chain'):
+            msg_content = message_content.chain
+            logger.info(f"通过 chain 属性获取内容: {type(msg_content)}")
+            text_result = self._extract_text_from_content(msg_content)
+            if text_result:
+                logger.info(f"从 chain 属性提取的文本: {text_result}")
+                return text_result.strip()  # 去除首尾空白字符
+        
+        # 方法3: 如果是可迭代的消息链
+        if hasattr(message_content, '__iter__') and not isinstance(message_content, str):
+            logger.info(f"作为消息链处理: {type(message_content)}")
+            text_result = self._extract_text_from_content(message_content)
+            if text_result:
+                logger.info(f"从消息链提取的文本: {text_result}")
+                return text_result.strip()  # 去除首尾空白字符
+        
+        # 方法4: 最后尝试直接转换为字符串
+        try:
+            text_result = str(message_content)
+            logger.info(f"直接转换为字符串: {text_result}")
+            return text_result.strip()  # 去除首尾空白字符
+        except Exception as e:
+            logger.warning(f"无法转换消息内容为字符串: {e}")
+            return ""
+    
+    def _extract_text_from_content(self, content: Any) -> str:
+        """从消息内容中提取纯文本"""
+        if isinstance(content, str):
+            return content
+        
+        if hasattr(content, '__iter__') and not isinstance(content, str):
+            text_parts = []
+            for component in content:
+                # 检查是否是 Plain 组件
+                if hasattr(component, 'type'):
+                    try:
+                        if component.type.value == 'Plain':
+                            if hasattr(component, 'text'):
+                                text_parts.append(component.text)
+                        # 如果是其他组件，忽略（因为我们只想要纯文本）
+                    except AttributeError:
+                        # 如果没有 type 属性，尝试其他方法
+                        pass
+                
+                # 检查是否有 text 属性
+                elif hasattr(component, 'text'):
+                    text_parts.append(component.text)
+                
+                # 如果组件本身就是字符串
+                elif isinstance(component, str):
+                    text_parts.append(component)
+                
+                # 其他情况，尝试转换为字符串
+                else:
+                    try:
+                        text_parts.append(str(component))
+                    except:
+                        pass
+            
+            return ''.join(text_parts)
+        
+        # 单个组件的情况
+        if hasattr(content, 'text'):
+            return content.text
+        
+        # 最后尝试转换为字符串
+        try:
+            return str(content)
+        except:
+            return ""
+        
+        # 其他情况，尝试转换为字符串
+        try:
+            return str(message_content)
+        except:
+            return ""
+
+    async def _delayed_recall(self, event, sent_message) -> None:
+        """延迟撤回消息"""
+        try:
+            logger.info(f"准备在{self.auto_recall_delay}秒后撤回消息")
+            # 等待指定的延迟时间
+            await asyncio.sleep(self.auto_recall_delay)
+            
+            # 尝试获取消息ID
+            message_id = None
+            if sent_message is None:
+                logger.warning("sent_message 为 None")
+                return
+                
+            logger.info(f"尝试解析消息ID: {type(sent_message)}, 内容: {sent_message}")
+            
+            # 尝试多种方式获取消息ID
+            if hasattr(sent_message, 'message_id'):
+                message_id = sent_message.message_id
+                logger.info(f"通过 message_id 属性获取: {message_id}")
+            elif isinstance(sent_message, int):
+                message_id = sent_message
+                logger.info(f"直接是整数: {message_id}")
+            elif hasattr(sent_message, 'id'):
+                message_id = sent_message.id
+                logger.info(f"通过 id 属性获取: {message_id}")
+            elif isinstance(sent_message, dict):
+                # 如果是字典，尝试常见的键
+                for key in ['message_id', 'id', 'msg_id']:
+                    if key in sent_message:
+                        message_id = sent_message[key]
+                        logger.info(f"通过字典键 {key} 获取: {message_id}")
+                        break
+            elif isinstance(sent_message, str):
+                # 如果是字符串，尝试解析为整数
+                try:
+                    message_id = int(sent_message)
+                    logger.info(f"字符串转整数: {message_id}")
+                except ValueError:
+                    pass
+            
+            if message_id is not None:
+                # 尝试撤回消息
+                try:
+                    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+                    if isinstance(event, AiocqhttpMessageEvent):
+                        client = event.bot
+                        await client.delete_msg(message_id=message_id)
+                        logger.info(f"已自动撤回消息 ID: {message_id}")
+                    else:
+                        logger.warning(f"事件类型不是 AiocqhttpMessageEvent: {type(event)}")
+                except Exception as delete_error:
+                    logger.warning(f"撤回消息时出错: {delete_error}")
+            else:
+                logger.warning(f"无法获取消息ID: {type(sent_message)}, 内容: {sent_message}")
+                
+        except Exception as e:
+            logger.warning(f"自动撤回消息失败: {e}")
 
     async def _init_database(self) -> None:
         """初始化用户下载记录数据库"""
@@ -520,7 +774,7 @@ class ModComfyUI(Star):
             
         except Exception as e:
             logger.error(f"发送workflow帮助失败: {e}")
-            await event.send(event.plain_result(f"获取帮助信息失败: {str(e)}"))
+            await self._send_with_auto_recall(event, event.plain_result(f"获取帮助信息失败: {str(e)}"))
 
     async def _send_workflow_help_image(self, event: AstrMessageEvent, workflow_name: str, prefix: str, config: Dict[str, Any]) -> bool:
         """发送图片格式的workflow帮助信息"""
@@ -562,7 +816,7 @@ class ModComfyUI(Star):
     async def _send_workflow_help_text(self, event: AstrMessageEvent, prefix: str, config: Dict[str, Any]) -> None:
         """发送文本格式的workflow帮助信息"""
         help_text = self._generate_workflow_help_text(prefix, config)
-        await event.send(event.plain_result(help_text))
+        await self._send_with_auto_recall(event, event.plain_result(help_text))
 
     def _generate_workflow_help_text(self, prefix: str, config: Dict[str, Any]) -> str:
         """生成workflow帮助文本内容"""
@@ -1076,7 +1330,7 @@ class ModComfyUI(Star):
                 except Exception as e:
                     event = task_data["event"]
                     err_msg = f"\n图片生成失败：{str(e)[:100]}"
-                    await event.send(event.plain_result(err_msg))
+                    await self._send_with_auto_recall(event, event.plain_result(err_msg))
                     logger.error(f"{worker_name}处理任务失败：{str(e)}")
                 finally:
                     self.task_queue.task_done()
@@ -1468,7 +1722,7 @@ class ModComfyUI(Star):
                 for lora in lora_list
             ])
             extra_info += lora_info
-        await event.send(event.plain_result(
+        await self._send_with_auto_recall(event, event.plain_result(
             f"\n{task_type}任务已下发至服务器【{server.name}】：\n提示词：{self._truncate_prompt(prompt)}\nSeed：{current_seed}\n{extra_info}\n任务ID：{prompt_id[:8]}..."
         ))
         history_data = await self._poll_task_status(server, prompt_id)
@@ -1523,7 +1777,7 @@ class ModComfyUI(Star):
         # 发送workflow到ComfyUI
         prompt_id = await self._send_comfyui_prompt(server, prompt)
         
-        await event.send(event.plain_result(
+        await self._send_with_auto_recall(event, event.plain_result(
             f"\nWorkflow任务「{config['name']}」已下发至服务器【{server.name}】：\n任务ID：{prompt_id[:8]}..."
         ))
         
@@ -1551,7 +1805,7 @@ class ModComfyUI(Star):
         
         if not image_urls:
             # 检查是否有其他类型的输出
-            await event.send(event.plain_result(f"Workflow「{config['name']}」执行完成，但未检测到图片输出"))
+            await self._send_with_auto_recall(event, event.plain_result(f"Workflow「{config['name']}」执行完成，但未检测到图片输出"))
             return
         
         # 构建结果消息
@@ -1743,12 +1997,12 @@ class ModComfyUI(Star):
     async def generate_image(self, event: AstrMessageEvent) -> None:
         if not self._is_in_open_time():
             open_desc = self._get_open_time_desc()
-            await event.send(event.plain_result(
+            await self._send_with_auto_recall(event, event.plain_result(
                 f"\n当前未开放图片生成服务～\n开放时间：{open_desc}\n请在开放时间段内提交任务！"
             ))
             return
         if not self._get_any_healthy_server():
-            await event.send(event.plain_result(
+            await self._send_with_auto_recall(event, event.plain_result(
                 f"\n所有ComfyUI服务器均不可用，请稍后再试！"
             ))
             return
@@ -1765,7 +2019,7 @@ class ModComfyUI(Star):
             params, lora_list = self._parse_lora_params(params)
         except ValueError as e:
             filtered_err = self._filter_server_urls(str(e))
-            await event.send(event.plain_result(f"\n参数解析失败：{filtered_err}"))
+            await self._send_with_auto_recall(event, event.plain_result(f"\n参数解析失败：{filtered_err}"))
             return
         prompt_with_params = " ".join(params)
         res_pattern = r'宽(\d+),高(\d+)'
@@ -1781,30 +2035,30 @@ class ModComfyUI(Star):
                 input_w = int(res_match.group(1))
                 input_h = int(res_match.group(2))
                 if not (self.min_width <= input_w <= self.max_width):
-                    await event.send(event.plain_result(f"\n宽度{input_w}非法（需{self.min_width}~{self.max_width}像素），请重新输入合法参数！"))
+                    await self._send_with_auto_recall(event, event.plain_result(f"\n宽度{input_w}非法（需{self.min_width}~{self.max_width}像素），请重新输入合法参数！"))
                     return
                 if not (self.min_height <= input_h <= self.max_height):
-                    await event.send(event.plain_result(f"\n高度{input_h}非法（需{self.min_height}~{self.max_height}像素），请重新输入合法参数！"))
+                    await self._send_with_auto_recall(event, event.plain_result(f"\n高度{input_h}非法（需{self.min_height}~{self.max_height}像素），请重新输入合法参数！"))
                     return
                 current_width = input_w
                 current_height = input_h
                 pure_prompt = re.sub(res_pattern, "", pure_prompt).strip()
             except Exception as e:
-                await event.send(event.plain_result(f"\n宽高解析失败：{str(e)}，请重新输入合法参数！"))
+                await self._send_with_auto_recall(event, event.plain_result(f"\n宽高解析失败：{str(e)}，请重新输入合法参数！"))
                 return
         if batch_match:
             try:
                 input_batch = int(batch_match.group(1))
                 if not (1 <= input_batch <= self.max_txt2img_batch):
-                    await event.send(event.plain_result(f"\n批量数{input_batch}非法（文生图需1~{self.max_txt2img_batch}），请重新输入合法参数！"))
+                    await self._send_with_auto_recall(event, event.plain_result(f"\n批量数{input_batch}非法（文生图需1~{self.max_txt2img_batch}），请重新输入合法参数！"))
                     return
                 current_batch_size = input_batch
                 pure_prompt = re.sub(batch_pattern, "", pure_prompt).strip()
             except Exception as e:
-                await event.send(event.plain_result(f"\n批量数解析失败：{str(e)}，请重新输入合法参数！"))
+                await self._send_with_auto_recall(event, event.plain_result(f"\n批量数解析失败：{str(e)}，请重新输入合法参数！"))
                 return
         if not pure_prompt:
-            await event.send(event.plain_result(f"\n提示词不能为空！使用方法：\n发送「aimg <提示词> [宽X,高Y] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]」参数可选，非必填\n文生图默认批量数：{self.txt2img_batch_size}，最大支持{self.max_txt2img_batch}"))
+            await self._send_with_auto_recall(event, event.plain_result(f"\n提示词不能为空！使用方法：\n发送「aimg <提示词> [宽X,高Y] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]」参数可选，非必填\n文生图默认批量数：{self.txt2img_batch_size}，最大支持{self.max_txt2img_batch}"))
             return
         try:
             current_seed = random.randint(1, 18446744073709551615) if (self.seed == "随机" or not self.seed) else int(self.seed)
@@ -1813,7 +2067,7 @@ class ModComfyUI(Star):
         # 检查用户任务数限制
         user_id = str(event.get_sender_id())
         if not await self._increment_user_task_count(user_id):
-            await event.send(event.plain_result(
+            await self._send_with_auto_recall(event, event.plain_result(
                 f"\n您当前同时进行的任务数已达上限（{self.max_concurrent_tasks_per_user}个），请等待当前任务完成后再提交新任务！"
             ))
             return
@@ -1821,7 +2075,7 @@ class ModComfyUI(Star):
         if self.task_queue.full():
             # 如果队列已满，需要减少刚刚增加的用户任务计数
             await self._decrement_user_task_count(user_id)
-            await event.send(event.plain_result(f"\n当前任务队列已满（{self.max_task_queue}个任务上限），请稍后再试！"))
+            await self._send_with_auto_recall(event, event.plain_result(f"\n当前任务队列已满（{self.max_task_queue}个任务上限），请稍后再试！"))
             return
             
         await self.task_queue.put({
@@ -1852,7 +2106,7 @@ class ModComfyUI(Star):
             ])
         available_servers = [s.name for s in self.comfyui_servers if s.healthy]
         server_feedback = f"\n可用服务器：{', '.join(available_servers)}" if available_servers else "\n当前无可用服务器，任务将在服务器恢复后处理"
-        await event.send(event.plain_result(
+        await self._send_with_auto_recall(event, event.plain_result(
             f"\n文生图任务已加入队列（当前排队：{self.task_queue.qsize()}个）\n"
             f"提示词：{self._truncate_prompt(pure_prompt)}\n"
             f"Seed：{current_seed}\n"
@@ -2595,7 +2849,7 @@ class ModComfyUI(Star):
 {self._generate_workflow_text_help()}
         """
         
-        await event.send(event.plain_result(help_text.strip()))
+        await self._send_with_auto_recall(event, event.plain_result(help_text.strip()))
 
     # 添加帮助信息过滤器
     class HelpFilter(CustomFilter):
@@ -2745,7 +2999,7 @@ class ModComfyUI(Star):
         try:
             # 检查是否开启了自动保存功能
             if not self.enable_auto_save:
-                await event.send(event.plain_result(
+                await self._send_with_auto_recall(event, event.plain_result(
                     "❌ 未开启图片自动保存功能，无法生成压缩包！\n"
                     "请联系管理员在配置中开启 enable_auto_save 功能。"
                 ))
@@ -2753,7 +3007,7 @@ class ModComfyUI(Star):
             
             # 检查是否开启了输出压缩包功能
             if not self.enable_output_zip:
-                await event.send(event.plain_result(
+                await self._send_with_auto_recall(event, event.plain_result(
                     "❌ 未开启输出压缩包功能！\n"
                     "请联系管理员在配置中开启 enable_output_zip 功能。"
                 ))
@@ -2765,7 +3019,7 @@ class ModComfyUI(Star):
             # 检查下载次数限制
             can_download, current_count = await self._check_download_limit(user_id)
             if not can_download:
-                await event.send(event.plain_result(
+                await self._send_with_auto_recall(event, event.plain_result(
                     f"❌ 今日下载次数已达上限！\n"
                     f"当前已下载: {current_count} 次\n"
                     f"每日限制: {self.daily_download_limit} 次\n"
@@ -2774,29 +3028,29 @@ class ModComfyUI(Star):
                 return
             
             # 获取今天的图片
-            await event.send(event.plain_result("🔍 正在搜索今天的图片..."))
+            await self._send_with_auto_recall(event, event.plain_result("🔍 正在搜索今天的图片..."))
             image_files = await self._get_today_images(user_id)
             
             if not image_files:
-                await event.send(event.plain_result(
+                await self._send_with_auto_recall(event, event.plain_result(
                     "📭 今天还没有生成图片哦～\n"
                     "先使用 aimg 或 img2img 指令生成一些图片吧！"
                 ))
                 return
             
-            await event.send(event.plain_result(f"📁 找到 {len(image_files)} 张图片，正在生成压缩包..."))
+            await self._send_with_auto_recall(event, event.plain_result(f"📁 找到 {len(image_files)} 张图片，正在生成压缩包..."))
             
             # 创建压缩包
             zip_path = await self._create_zip_archive(image_files, user_id)
             if not zip_path:
-                await event.send(event.plain_result(
+                await self._send_with_auto_recall(event, event.plain_result(
                     "❌ 压缩包创建失败，请稍后重试！"
                 ))
                 return
             
             # 使用 try-finally 确保压缩包被清理
             try:
-                await event.send(event.plain_result("📦 压缩包创建完成，正在上传..."))
+                await self._send_with_auto_recall(event, event.plain_result("📦 压缩包创建完成，正在上传..."))
                 
                 # 上传压缩包
                 upload_success = await self._upload_zip_file(event, zip_path)
@@ -2808,7 +3062,7 @@ class ModComfyUI(Star):
                     # 获取更新后的下载次数
                     _, new_count = await self._check_download_limit(user_id)
                     
-                    await event.send(event.plain_result(
+                    await self._send_with_auto_recall(event, event.plain_result(
                         f"✅ 压缩包上传成功！\n"
                         f"📁 文件名: {os.path.basename(zip_path)}\n"
                         f"📊 包含图片: {len(image_files)} 张\n"
@@ -2816,7 +3070,7 @@ class ModComfyUI(Star):
                         f"💡 提示: 请从群文件或私聊文件中下载"
                     ))
                 else:
-                    await event.send(event.plain_result(
+                    await self._send_with_auto_recall(event, event.plain_result(
                         "❌ 压缩包上传失败，请稍后重试！"
                     ))
             
@@ -2836,7 +3090,7 @@ class ModComfyUI(Star):
                 
         except Exception as e:
             logger.error(f"处理输出压缩包指令失败: {e}")
-            await event.send(event.plain_result(
+            await self._send_with_auto_recall(event, event.plain_result(
                 "❌ 处理请求时发生错误，请稍后重试！"
             ))
 
@@ -2913,12 +3167,12 @@ class ModComfyUI(Star):
     async def handle_img2img(self, event: AstrMessageEvent) -> None:
         if not self._is_in_open_time():
             open_desc = self._get_open_time_desc()
-            await event.send(event.plain_result(
+            await self._send_with_auto_recall(event, event.plain_result(
                 f"\n当前未开放图片生成服务～\n开放时间：{open_desc}\n请在开放时间段内提交任务！"
             ))
             return
         if not self._get_any_healthy_server():
-            await event.send(event.plain_result(
+            await self._send_with_auto_recall(event, event.plain_result(
                 f"\n所有ComfyUI服务器均不可用，请稍后再试！"
             ))
             return
@@ -2936,7 +3190,7 @@ class ModComfyUI(Star):
             params, lora_list = self._parse_lora_params(params)
         except ValueError as e:
             filtered_err = self._filter_server_urls(str(e))
-            await event.send(event.plain_result(f"\n参数解析失败：{filtered_err}"))
+            await self._send_with_auto_recall(event, event.plain_result(f"\n参数解析失败：{filtered_err}"))
             return
         prompt = ""
         denoise = self.default_denoise
@@ -2960,25 +3214,25 @@ class ModComfyUI(Star):
             try:
                 input_batch = int(batch_param.group(1))
                 if not (1 <= input_batch <= self.max_img2img_batch):
-                    await event.send(event.plain_result(f"\n批量数{input_batch}非法（图生图需1~{self.max_img2img_batch}），请重新输入合法参数！"))
+                    await self._send_with_auto_recall(event, event.plain_result(f"\n批量数{input_batch}非法（图生图需1~{self.max_img2img_batch}），请重新输入合法参数！"))
                     return
                 current_batch_size = input_batch
             except Exception as e:
-                await event.send(event.plain_result(f"\n批量数解析失败：{str(e)}，请重新输入合法参数！"))
+                await self._send_with_auto_recall(event, event.plain_result(f"\n批量数解析失败：{str(e)}，请重新输入合法参数！"))
                 return
         if denoise_param:
             try:
                 denoise_val = float(denoise_param.group(1))
                 if not (0 <= denoise_val <= 1):
-                    await event.send(event.plain_result(f"\n噪声系数{denoise_val}非法（需0-1之间的数值），请重新输入合法参数！"))
+                    await self._send_with_auto_recall(event, event.plain_result(f"\n噪声系数{denoise_val}非法（需0-1之间的数值），请重新输入合法参数！"))
                     return
                 denoise = denoise_val
             except ValueError as e:
-                await event.send(event.plain_result(f"\n噪声系数解析失败：{str(e)}，请重新输入合法参数！"))
+                await self._send_with_auto_recall(event, event.plain_result(f"\n噪声系数解析失败：{str(e)}，请重新输入合法参数！"))
                 return
         prompt = " ".join(prompt_params).strip()
         if not prompt:
-            await event.send(event.plain_result(
+            await self._send_with_auto_recall(event, event.plain_result(
                 f"\n图生图提示词不能为空！使用方法：\n发送「img2img <提示词> [噪声:数值] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]」+ 图片或引用包含图片的消息\n例：img2img 猫咪 噪声:0.7 批量2 model:动漫风格 lora:动物:1.2!0.9 + 图片/引用图片消息\n图生图默认批量数：{self.img2img_batch_size}，最大支持{self.max_img2img_batch}\n默认噪声系数：{self.default_denoise}"
             ))
             return
@@ -2994,17 +3248,17 @@ class ModComfyUI(Star):
             selected_image = reply_image_components[0]
             image_source = "引用消息"
         else:
-            await event.send(event.plain_result("\n未检测到图片，请重新发送图文消息或引用包含图片的消息"))
+            await self._send_with_auto_recall(event, event.plain_result("\n未检测到图片，请重新发送图文消息或引用包含图片的消息"))
             return
         upload_server = await self._get_next_available_server() or self._get_any_healthy_server()
         if not upload_server:
-            await event.send(event.plain_result("\n没有可用服务器上传图片，请稍后再试"))
+            await self._send_with_auto_recall(event, event.plain_result("\n没有可用服务器上传图片，请稍后再试"))
             return
         try:
             img_path = await selected_image.convert_to_file_path()
             image_filename = await self._upload_image_to_comfyui(upload_server, img_path)
         except Exception as e:
-            await event.send(event.plain_result(f"\n图片处理失败：{str(e)[:100]}"))
+            await self._send_with_auto_recall(event, event.plain_result(f"\n图片处理失败：{str(e)[:100]}"))
             return
         try:
             current_seed = random.randint(1, 18446744073709551615) if (self.seed == "随机" or not self.seed) else int(self.seed)
@@ -3013,7 +3267,7 @@ class ModComfyUI(Star):
         # 检查用户任务数限制
         user_id = str(event.get_sender_id())
         if not await self._increment_user_task_count(user_id):
-            await event.send(event.plain_result(
+            await self._send_with_auto_recall(event, event.plain_result(
                 f"\n您当前同时进行的任务数已达上限（{self.max_concurrent_tasks_per_user}个），请等待当前任务完成后再提交新任务！"
             ))
             return
@@ -3021,7 +3275,7 @@ class ModComfyUI(Star):
         if self.task_queue.full():
             # 如果队列已满，需要减少刚刚增加的用户任务计数
             await self._decrement_user_task_count(user_id)
-            await event.send(event.plain_result(f"\n当前任务队列已满（{self.max_task_queue}个任务上限），请稍后再试！"))
+            await self._send_with_auto_recall(event, event.plain_result(f"\n当前任务队列已满（{self.max_task_queue}个任务上限），请稍后再试！"))
             return
             
         await self.task_queue.put({
@@ -3044,7 +3298,7 @@ class ModComfyUI(Star):
             ])
         available_servers = [s.name for s in self.comfyui_servers if s.healthy]
         server_feedback = f"\n可用服务器：{', '.join(available_servers)}" if available_servers else "\n当前无可用服务器，任务将在服务器恢复后处理"
-        await event.send(event.plain_result(
+        await self._send_with_auto_recall(event, event.plain_result(
             f"\n图生图任务已加入队列（当前排队：{self.task_queue.qsize()}个）\n"
             f"提示词：{self._truncate_prompt(prompt)}\n"
             f"Seed：{current_seed}\n"
@@ -3230,7 +3484,7 @@ class ModComfyUI(Star):
 
             prefix = words[0]
             if prefix not in self.workflow_prefixes:
-                await event.send(event.plain_result(f"未知的workflow前缀: {prefix}"))
+                await self._send_with_auto_recall(event, event.plain_result(f"未知的workflow前缀: {prefix}"))
                 return
 
             # 检查是否是help命令
@@ -3245,7 +3499,7 @@ class ModComfyUI(Star):
 
             # 检查开放时间
             if not self._is_in_open_time():
-                await event.send(event.plain_result(
+                await self._send_with_auto_recall(event, event.plain_result(
                     f"当前不在开放时间内，开放时间：{self.open_time_ranges}"
                 ))
                 return
@@ -3253,7 +3507,7 @@ class ModComfyUI(Star):
             # 检查用户并发限制
             user_id = str(event.get_sender_id())
             if not await self._check_user_task_limit(user_id):
-                await event.send(event.plain_result(
+                await self._send_with_auto_recall(event, event.plain_result(
                     f"您当前有过多任务在执行中（最大{self.max_concurrent_tasks_per_user}个），请稍后再试"
                 ))
                 return
@@ -3266,14 +3520,14 @@ class ModComfyUI(Star):
             missing_params = self._validate_required_params(config, params)
             if missing_params:
                 param_list = ", ".join(missing_params)
-                await event.send(event.plain_result(f"缺少必需的参数：{param_list}"))
+                await self._send_with_auto_recall(event, event.plain_result(f"缺少必需的参数：{param_list}"))
                 return
 
             # 验证参数值的有效性
             validation_errors = self._validate_param_values(config, params)
             if validation_errors:
                 error_msg = "\n".join(validation_errors)
-                await event.send(event.plain_result(f"参数输入有误：\n{error_msg}"))
+                await self._send_with_auto_recall(event, event.plain_result(f"参数输入有误：\n{error_msg}"))
                 return
 
             # 获取图片输入（如果需要）
@@ -3290,7 +3544,7 @@ class ModComfyUI(Star):
             # 处理图片输入
             if config.get("input_nodes"):
                 if not has_image and not has_image_in_reply:
-                    await event.send(event.plain_result("此workflow需要图片输入，请发送图片或引用包含图片的消息"))
+                    await self._send_with_auto_recall(event, event.plain_result("此workflow需要图片输入，请发送图片或引用包含图片的消息"))
                     return
                 
                 # 获取图片
@@ -3305,17 +3559,17 @@ class ModComfyUI(Star):
                     # 选择可用的服务器
                     upload_server = await self._get_next_available_server() or self._get_any_healthy_server()
                     if not upload_server:
-                        await event.send(event.plain_result("当前没有可用的ComfyUI服务器"))
+                        await self._send_with_auto_recall(event, event.plain_result("当前没有可用的ComfyUI服务器"))
                         return
                     
                     # 将图片转换为文件路径
                     img_path = await image_seg.convert_to_file_path()
                     image_filename = await self._upload_image_to_comfyui(upload_server, img_path)
                 except Exception as e:
-                    await event.send(event.plain_result(f"图片上传失败：{str(e)[:100]}"))
+                    await self._send_with_auto_recall(event, event.plain_result(f"图片上传失败：{str(e)[:100]}"))
                     return
                 if not image_filename:
-                    await event.send(event.plain_result("图片上传失败"))
+                    await self._send_with_auto_recall(event, event.plain_result("图片上传失败"))
                     return
                 images.append(image_filename)
 
@@ -3328,7 +3582,7 @@ class ModComfyUI(Star):
             # 添加到任务队列
             if self.task_queue.full():
                 await self._decrement_user_task_count(user_id)
-                await event.send(event.plain_result(f"当前任务队列已满（{self.max_task_queue}个任务上限），请稍后再试！"))
+                await self._send_with_auto_recall(event, event.plain_result(f"当前任务队列已满（{self.max_task_queue}个任务上限），请稍后再试！"))
                 return
 
             await self.task_queue.put({
@@ -3339,13 +3593,13 @@ class ModComfyUI(Star):
                 "is_workflow": True
             })
 
-            await event.send(event.plain_result(
+            await self._send_with_auto_recall(event, event.plain_result(
                 f"Workflow任务「{config['name']}」已加入队列（当前排队：{self.task_queue.qsize()}个）"
             ))
 
         except Exception as e:
             logger.error(f"处理workflow命令失败: {e}")
-            await event.send(event.plain_result(f"处理workflow命令失败: {str(e)}"))
+            await self._send_with_auto_recall(event, event.plain_result(f"处理workflow命令失败: {str(e)}"))
 
     def _parse_workflow_params(self, args: List[str], config: Dict[str, Any]) -> Dict[str, Any]:
         """解析workflow参数，支持自定义键名"""
