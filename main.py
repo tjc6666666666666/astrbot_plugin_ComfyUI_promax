@@ -1,6 +1,6 @@
 from astrbot.api.message_components import Plain, Image, Reply
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api.event.filter import CustomFilter
 from astrbot.api import logger
 from astrbot.core.config import AstrBotConfig
@@ -23,6 +23,8 @@ import sqlite3
 import zipfile
 import shutil
 import aiosqlite
+import copy
+import glob
 
 import io
 import base64
@@ -128,17 +130,27 @@ class ModComfyUI(Star):
         self.help_server_site: Optional[web.TCPSite] = None
         self.actual_help_port = self.help_server_port
 
+        # 获取插件数据目录
+        self.data_dir = StarTools.get_data_dir()
+        self.data_dir.mkdir(exist_ok=True)
+        
         # 自动保存图片配置
         self.enable_auto_save = config.get("enable_auto_save", False)
-        self.auto_save_dir = config.get("auto_save_directory", config.get("auto_save_dir", "output"))
+        auto_save_config = config.get("auto_save_directory", config.get("auto_save_dir", "output"))
+        if os.path.isabs(auto_save_config):
+            # 绝对路径：使用用户配置
+            self.auto_save_dir = auto_save_config
+        else:
+            # 相对路径：基于插件数据目录
+            self.auto_save_dir = self.data_dir / auto_save_config
         
         # 输出压缩包配置
         self.enable_output_zip = config.get("enable_output_zip", True)
         self.daily_download_limit = config.get("daily_download_limit", 1)  # 每天下载次数限制
         self.only_own_images = config.get("only_own_images", False)  # 是否只能下载自己生成的图片
         
-        # 数据库配置
-        self.db_dir = config.get("db_directory", config.get("auto_save_directory", "output"))
+        # 数据库配置 - 数据库与图片存储在同一目录
+        self.db_dir = self.auto_save_dir
         self.db_path = os.path.join(self.db_dir, "user.db")  # 数据库路径
 
         # 用户队列限制配置
@@ -148,8 +160,8 @@ class ModComfyUI(Star):
         self.workflow_dir = os.path.join(os.path.dirname(__file__), "workflow")
         self.workflows: Dict[str, Dict[str, Any]] = {}
         self.workflow_prefixes: Dict[str, str] = {}  # prefix -> workflow_name
-        self._load_workflows()
-        self.workflow_list_desc = self._generate_workflow_list_desc()
+        # 将在初始化任务中异步加载
+        asyncio.create_task(self._load_workflows_and_generate_desc())
 
         # 2. 状态管理
         self.task_queue: asyncio.Queue = asyncio.Queue(maxsize=self.max_task_queue)
@@ -173,7 +185,8 @@ class ModComfyUI(Star):
         """初始化用户下载记录数据库"""
         try:
             # 确保数据库目录存在
-            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, os.makedirs, os.path.dirname(self.db_path), True)
             
             async with aiosqlite.connect(self.db_path) as conn:
                 # 创建用户下载记录表
@@ -390,6 +403,11 @@ class ModComfyUI(Star):
                 desc_list.append(f"  - {desc}（文件：{filename}）")
         
         return "\n".join(desc_list)
+
+    async def _load_workflows_and_generate_desc(self) -> None:
+        """异步加载workflows并生成描述"""
+        await self._load_workflows()
+        self.workflow_list_desc = self._generate_workflow_list_desc()
 
     def _generate_workflow_list_desc(self) -> str:
         """生成workflow列表描述"""
@@ -780,9 +798,7 @@ class ModComfyUI(Star):
         if not isinstance(self.auto_save_dir, str) or not self.auto_save_dir.strip():
             raise ValueError(f"配置项错误：auto_save_dir（需为非空字符串）")
         
-        # 验证数据库配置
-        if not isinstance(self.db_dir, str) or not self.db_dir.strip():
-            raise ValueError(f"配置项错误：db_directory（需为非空字符串）")
+
         for cfg_key, cfg_type in required_configs:
             cfg_value = getattr(self, cfg_key)
             if not isinstance(cfg_value, cfg_type):
@@ -2784,7 +2800,6 @@ class ModComfyUI(Star):
     async def cleanup_temp_files(self) -> None:
         """清理临时文件"""
         try:
-            import glob
             temp_files = glob.glob(os.path.join(os.path.dirname(__file__), "help_*.png"))
             zip_files = glob.glob(os.path.join(os.path.dirname(__file__), "comfyui_images_*.zip"))
             
@@ -2848,21 +2863,7 @@ class ModComfyUI(Star):
         except Exception as e:
             logger.error(f"资源清理时发生错误: {e}")
 
-    def __del__(self):
-        """析构函数 - 仅作为最后的保障"""
-        try:
-            # 同步版本的临时文件清理，用于析构函数
-            import glob
-            temp_files = glob.glob(os.path.join(os.path.dirname(__file__), "help_*.png"))
-            zip_files = glob.glob(os.path.join(os.path.dirname(__file__), "comfyui_images_*.zip"))
-            
-            for temp_file in temp_files + zip_files:
-                try:
-                    os.remove(temp_file)
-                except:
-                    pass
-        except:
-            pass
+
 
     # 图生图指令
     @filter.custom_filter(Img2ImgFilter)
@@ -3012,32 +3013,48 @@ class ModComfyUI(Star):
             + lora_feedback
         ))
 
-    def _load_workflows(self) -> None:
+    async def _load_workflows(self) -> None:
         """加载workflow模块"""
         try:
-            if not os.path.exists(self.workflow_dir):
-                os.makedirs(self.workflow_dir, exist_ok=True)
+            loop = asyncio.get_event_loop()
+            
+            # 检查并创建workflow目录
+            if not await loop.run_in_executor(None, os.path.exists, self.workflow_dir):
+                await loop.run_in_executor(None, os.makedirs, self.workflow_dir, True)
                 logger.info(f"创建workflow目录: {self.workflow_dir}")
                 return
 
-            for workflow_name in os.listdir(self.workflow_dir):
+            # 获取workflow列表
+            workflow_names = await loop.run_in_executor(None, os.listdir, self.workflow_dir)
+            
+            for workflow_name in workflow_names:
                 workflow_path = os.path.join(self.workflow_dir, workflow_name)
-                if not os.path.isdir(workflow_path):
+                if not await loop.run_in_executor(None, os.path.isdir, workflow_path):
                     continue
 
                 config_file = os.path.join(workflow_path, "config.json")
                 workflow_file = os.path.join(workflow_path, "workflow.json")
 
-                if not os.path.exists(config_file) or not os.path.exists(workflow_file):
+                # 检查文件是否存在
+                config_exists = await loop.run_in_executor(None, os.path.exists, config_file)
+                workflow_exists = await loop.run_in_executor(None, os.path.exists, workflow_file)
+                
+                if not config_exists or not workflow_exists:
                     logger.warning(f"workflow {workflow_name} 缺少必要文件，跳过")
                     continue
 
                 try:
-                    with open(config_file, 'r', encoding='utf-8') as f:
-                        config = json.load(f)
+                    # 异步读取配置文件
+                    def read_config():
+                        with open(config_file, 'r', encoding='utf-8') as f:
+                            return json.load(f)
                     
-                    with open(workflow_file, 'r', encoding='utf-8') as f:
-                        workflow_data = json.load(f)
+                    def read_workflow():
+                        with open(workflow_file, 'r', encoding='utf-8') as f:
+                            return json.load(f)
+                    
+                    config = await loop.run_in_executor(None, read_config)
+                    workflow_data = await loop.run_in_executor(None, read_workflow)
 
                     # 验证配置格式
                     required_fields = ["name", "prefix", "input_nodes", "output_nodes"]
@@ -3512,7 +3529,6 @@ class ModComfyUI(Star):
     def _build_workflow(self, workflow_data: Dict[str, Any], config: Dict[str, Any], 
                        params: Dict[str, Any], images: List[str]) -> Dict[str, Any]:
         """构建最终的workflow"""
-        import copy
         final_workflow = copy.deepcopy(workflow_data)
         
         # 设置图片输入
