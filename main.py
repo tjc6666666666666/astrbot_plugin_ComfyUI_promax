@@ -144,6 +144,9 @@ class ModComfyUI(Star):
             # 相对路径：基于插件数据目录
             self.auto_save_dir = self.data_dir / auto_save_config
         
+        # 确保自动保存目录存在，处理文件冲突
+        self._ensure_directory_exists(self.auto_save_dir, "auto_save_dir")
+        
         # 输出压缩包配置
         self.enable_output_zip = config.get("enable_output_zip", True)
         self.daily_download_limit = config.get("daily_download_limit", 1)  # 每天下载次数限制
@@ -171,6 +174,12 @@ class ModComfyUI(Star):
         # 3. 用户队列计数管理
         self.user_task_counts: Dict[str, int] = {}  # 记录每个用户的当前任务数
         self.user_task_lock = asyncio.Lock()  # 保护用户任务计数的锁
+        
+        # 4. 服务器轮询索引锁
+        self.server_poll_lock = asyncio.Lock()  # 保护last_poll_index的并发访问
+        
+        # 5. 服务器状态锁
+        self.server_state_lock = asyncio.Lock()  # 保护服务器状态的并发访问
 
         # 3. 验证配置
         self._validate_config()
@@ -181,12 +190,39 @@ class ModComfyUI(Star):
         # 启动ComfyUI服务器监控（将在监控中启动worker）
         self.server_monitor_task = asyncio.create_task(self._start_server_monitor())
 
+    def _ensure_directory_exists(self, dir_path: Union[str, Path], dir_name: str = "directory") -> None:
+        """确保目录存在，如果存在为文件则备份并创建目录"""
+        dir_path_str = str(dir_path)
+        
+        if os.path.exists(dir_path_str):
+            if not os.path.isdir(dir_path_str):
+                # 路径存在但不是目录，需要处理
+                backup_path = f"{dir_path_str}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                logger.warning(f"{dir_name}路径 {dir_path_str} 已存在为文件，将重命名为 {backup_path} 并创建目录")
+                os.rename(dir_path_str, backup_path)
+                os.makedirs(dir_path_str, exist_ok=True)
+        else:
+            # 路径不存在，直接创建目录
+            os.makedirs(dir_path_str, exist_ok=True)
+
     async def _init_database(self) -> None:
         """初始化用户下载记录数据库"""
         try:
-            # 确保数据库目录存在
+            # 确保数据库目录存在，处理文件冲突
+            db_dir = os.path.dirname(self.db_path)
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, os.makedirs, os.path.dirname(self.db_path), True)
+            
+            # 检查路径是否存在以及类型
+            if os.path.exists(db_dir):
+                if not os.path.isdir(db_dir):
+                    # 路径存在但不是目录，需要处理
+                    backup_path = f"{db_dir}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    logger.warning(f"路径 {db_dir} 已存在为文件，将重命名为 {backup_path} 并创建目录")
+                    await loop.run_in_executor(None, os.rename, db_dir, backup_path)
+                    await loop.run_in_executor(None, os.makedirs, db_dir, True)
+            else:
+                # 路径不存在，直接创建目录
+                await loop.run_in_executor(None, os.makedirs, db_dir, True)
             
             async with aiosqlite.connect(self.db_path) as conn:
                 # 创建用户下载记录表
@@ -898,13 +934,14 @@ class ModComfyUI(Star):
                 if server.retry_after and datetime.now() < server.retry_after:
                     continue
                 is_healthy = await self._check_server_health(server)
-                if is_healthy != server.healthy:
-                    server.healthy = is_healthy
-                    status = "恢复正常" if is_healthy else "异常"
-                    logger.info(f"服务器{server.name}({server.url})状态变化：{status}")
-                    # 状态变化时管理worker
-                    await self._manage_worker_for_server(server)
-                server.last_checked = datetime.now()
+                async with self.server_state_lock:
+                    if is_healthy != server.healthy:
+                        server.healthy = is_healthy
+                        status = "恢复正常" if is_healthy else "异常"
+                        logger.info(f"服务器{server.name}({server.url})状态变化：{status}")
+                        # 状态变化时管理worker
+                        await self._manage_worker_for_server(server)
+                    server.last_checked = datetime.now()
             await asyncio.sleep(self.server_check_interval)
 
     async def _manage_worker_for_server(self, server: ServerState) -> None:
@@ -959,21 +996,24 @@ class ModComfyUI(Star):
 
 
 
-    def _get_next_available_server(self) -> Optional[ServerState]:
+    async def _get_next_available_server(self) -> Optional[ServerState]:
         """轮询获取下一个可用服务器（多worker并发安全）"""
         if not self.comfyui_servers:
             return None
-        # 先遍历所有服务器，优先选择空闲的
-        for _ in range(len(self.comfyui_servers)):
-            self.last_poll_index = (self.last_poll_index + 1) % len(self.comfyui_servers)
-            server = self.comfyui_servers[self.last_poll_index]
-            now = datetime.now()
-            if (server.healthy and 
-                not server.busy and 
-                (not server.retry_after or now >= server.retry_after)):
-                # 抢到服务器后立即标记为忙碌（避免被其他worker抢走）
-                server.busy = True
-                return server
+        
+        # 使用两个锁来保护轮询索引和服务器状态的并发访问
+        async with self.server_poll_lock, self.server_state_lock:
+            # 先遍历所有服务器，优先选择空闲的
+            for _ in range(len(self.comfyui_servers)):
+                self.last_poll_index = (self.last_poll_index + 1) % len(self.comfyui_servers)
+                server = self.comfyui_servers[self.last_poll_index]
+                now = datetime.now()
+                if (server.healthy and 
+                    not server.busy and 
+                    (not server.retry_after or now >= server.retry_after)):
+                    # 抢到服务器后立即标记为忙碌（避免被其他worker抢走）
+                    server.busy = True
+                    return server
         return None
 
     def _get_any_healthy_server(self) -> Optional[ServerState]:
@@ -985,27 +1025,30 @@ class ModComfyUI(Star):
                 return server
         return None
 
-    def _mark_server_busy(self, server: ServerState, busy: bool) -> None:
-        server.busy = busy
-        logger.debug(f"服务器{server.name}状态更新：{'忙碌' if busy else '空闲'}")
+    async def _mark_server_busy(self, server: ServerState, busy: bool) -> None:
+        async with self.server_state_lock:
+            server.busy = busy
+            logger.debug(f"服务器{server.name}状态更新：{'忙碌' if busy else '空闲'}")
 
-    def _handle_server_failure(self, server: ServerState) -> None:
-        server.failure_count += 1
-        logger.warning(f"服务器{server.name}失败次数：{server.failure_count}/{self.max_failure_count}")
-        if server.failure_count >= self.max_failure_count:
-            server.healthy = False
-            server.retry_after = datetime.now() + timedelta(seconds=self.retry_delay)
-            logger.warning(f"服务器{server.name}连续失败{self.max_failure_count}次，将在{self.retry_delay}秒后重试")
-        else:
-            server.retry_after = datetime.now() + timedelta(seconds=10)
+    async def _handle_server_failure(self, server: ServerState) -> None:
+        async with self.server_state_lock:
+            server.failure_count += 1
+            logger.warning(f"服务器{server.name}失败次数：{server.failure_count}/{self.max_failure_count}")
+            if server.failure_count >= self.max_failure_count:
+                server.healthy = False
+                server.retry_after = datetime.now() + timedelta(seconds=self.retry_delay)
+                logger.warning(f"服务器{server.name}连续失败{self.max_failure_count}次，将在{self.retry_delay}秒后重试")
+            else:
+                server.retry_after = datetime.now() + timedelta(seconds=10)
 
-    def _reset_server_failure(self, server: ServerState) -> None:
-        if server.failure_count > 0:
-            server.failure_count = 0
-            server.retry_after = None
-            if not server.healthy:
-                server.healthy = True
-                logger.info(f"服务器{server.name}恢复健康状态")
+    async def _reset_server_failure(self, server: ServerState) -> None:
+        async with self.server_state_lock:
+            if server.failure_count > 0:
+                server.failure_count = 0
+                server.retry_after = None
+                if not server.healthy:
+                    server.healthy = True
+                    logger.info(f"服务器{server.name}恢复健康状态")
 
     async def _worker_loop(self, worker_name: str, server: ServerState) -> None:
         """单个worker的任务处理循环，绑定到特定服务器"""
@@ -1359,12 +1402,12 @@ class ModComfyUI(Star):
                         await self._process_workflow_task(server, **workflow_task_data)
                     else:
                         await self._process_comfyui_task(server, **task_data)
-                    self._reset_server_failure(server)
+                    await self._reset_server_failure(server)
                     return
                 except Exception as e:
                     last_error = e
                     logger.error(f"服务器{server.name}处理任务失败（重试{retry_count}/{max_retries}）：{str(e)}")
-                    self._handle_server_failure(server)
+                    await self._handle_server_failure(server)
                     
                     # 如果服务器已被标记为不健康，不再重试
                     if not server.healthy:
@@ -1386,7 +1429,7 @@ class ModComfyUI(Star):
             if user_id:
                 await self._decrement_user_task_count(user_id)
             # 确保释放服务器
-            self._mark_server_busy(server, False)
+            await self._mark_server_busy(server, False)
 
     def _truncate_prompt(self, prompt: str) -> str:
         max_display_len = 8
@@ -2953,7 +2996,7 @@ class ModComfyUI(Star):
         else:
             await event.send(event.plain_result("\n未检测到图片，请重新发送图文消息或引用包含图片的消息"))
             return
-        upload_server = self._get_next_available_server() or self._get_any_healthy_server()
+        upload_server = await self._get_next_available_server() or self._get_any_healthy_server()
         if not upload_server:
             await event.send(event.plain_result("\n没有可用服务器上传图片，请稍后再试"))
             return
@@ -3296,7 +3339,7 @@ class ModComfyUI(Star):
                 # 上传图片到ComfyUI服务器
                 try:
                     # 选择可用的服务器
-                    upload_server = self._get_next_available_server() or self._get_any_healthy_server()
+                    upload_server = await self._get_next_available_server() or self._get_any_healthy_server()
                     if not upload_server:
                         await event.send(event.plain_result("当前没有可用的ComfyUI服务器"))
                         return
