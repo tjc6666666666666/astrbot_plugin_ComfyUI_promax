@@ -1,21 +1,13 @@
+# 核心依赖 (基于实际代码分析)
 aiohttp>=3.8.0
+aiosqlite>=0.17.0
+
+# 图像处理
 Pillow>=9.0.0
-aiofiles>=0.8.0
-asyncio-throttle>=1.0.0
-pathlib
-typing
-urllib3
-datetime
-threading
-socket
-sqlite3
-zipfile
-shutil
-io
-base64
-uuid
-re
-random
-json
-os
-asyncio
+numpy>=1.21.0
+opencv-python>=4.5.0
+
+# Web 框架 (用于配置界面)
+Flask>=2.3.0
+
+
