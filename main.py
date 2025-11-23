@@ -754,7 +754,7 @@ class ModComfyUI(Star):
                 workflow_details.append(f"  • {name} (前缀: {prefix})")
         
         workflow_help = f"\n\n🔧 可用Workflow列表：\n" + "\n".join(workflow_details)
-        workflow_help += "\n\nWorkflow使用说明：\n  - 格式：<前缀> [参数名:值 ...]\n  - 支持中英文参数名和别名（如：width/宽度/w，sampler_name/采样器/sampler）\n  - 参数格式：参数名:值（例：宽度:800 或 采样器:euler）\n  - 具体支持的参数名请查看各workflow的配置说明"
+        workflow_help += "\n\nWorkflow使用说明：\n  - 格式：<前缀> [参数名:值 ...]不会的加上help\n  - 支持中英文参数名和别名（如：width/宽度/w，sampler_name/采样器/sampler）\n  - 参数格式：参数名:值（例：宽度:800 或 采样器:euler）\n  - 具体支持的参数名请查看各workflow的配置说明"
         
         return workflow_help
 
