@@ -418,7 +418,53 @@
         </div>
     </div>
 
-
+    <!-- 配置文件预览 -->
+    <div class="config-section p-4 mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="mb-0">
+                <i class="bi bi-file-text text-danger"></i>
+                完整配置文件预览 (config.json)
+            </h5>
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleSection(this)" data-bs-toggle="tooltip" title="展开/折叠">
+                <i class="bi bi-chevron-down"></i>
+            </button>
+        </div>
+        
+        <div class="section-content" style="display: none;">
+            <div class="alert alert-warning">
+                <i class="bi bi-exclamation-triangle"></i>
+                <strong>注意：</strong>这是将要保存到 config.json 文件的完整配置内容。提交表单后，此配置将被写入工作流的配置文件中。
+            </div>
+            
+            <div class="mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <label class="form-label">当前配置预览</label>
+                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="updateConfigPreview()">
+                        <i class="bi bi-arrow-clockwise"></i>
+                        刷新预览
+                    </button>
+                </div>
+                <div class="border rounded bg-dark">
+                    <pre><code id="configPreview" class="text-light language-json">{
+  "name": "{{ workflow.config.name }}",
+  "prefix": "{{ workflow.config.prefix }}",
+  "description": "{{ workflow.config.description or '' }}",
+  "version": "{{ workflow.config.version or '' }}",
+  "author": "{{ workflow.config.author or '' }}",
+  "input_nodes": {{ workflow.config.input_nodes|tojson|safe }},
+  "output_nodes": {{ workflow.config.output_nodes|tojson|safe }},
+  "configurable_nodes": {{ workflow.config.configurable_nodes|tojson|safe }},
+  "input_mappings": {},
+  "output_mappings": {},
+  "node_configs": {{ workflow.config.node_configs|tojson|safe }}
+}</code></pre>
+                </div>
+                <div class="form-text">
+                    此预览会根据您在上方表单中的选择实时更新。最终的配置文件将包含所有节点参数配置。
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- 隐藏字段 -->
     <input type="hidden" name="config" id="configInput">
@@ -734,41 +780,14 @@ function addConfigurableNode() {
     `;
     list.appendChild(div);
     
-    // 如果已经解析过节点，只更新新添加的选择器
+    // 如果已经解析过节点，更新选择器
     const workflowJsonElement = document.getElementById('workflowJson');
     if (workflowJsonElement && workflowJsonElement.value.trim()) {
-        try {
-            const workflow = JSON.parse(workflowJson);
-            const nodes = [];
-            
-            // 提取所有节点信息
-            for (const [nodeId, nodeData] of Object.entries(workflow)) {
-                const title = nodeData._meta?.title || nodeData.class_type || `节点 ${nodeId}`;
-                nodes.push({
-                    id: nodeId,
-                    title: title,
-                    class_type: nodeData.class_type
-                });
-            }
-            
-            // 按节点ID排序
-            nodes.sort((a, b) => parseInt(a.id) - parseInt(b.id));
-            
-            // 只更新新添加的选择器
-            const newSelector = div.querySelector('.node-selector');
-            nodes.forEach(node => {
-                const option = document.createElement('option');
-                option.value = node.id;
-                option.textContent = `${node.id} - ${node.title}`;
-                if (node.class_type) {
-                    option.textContent += ` (${node.class_type})`;
-                }
-                newSelector.appendChild(option);
-            });
-        } catch (error) {
-            console.error('更新新选择器时出错:', error);
-        }
+        parseWorkflowNodes();
     }
+    
+    // 更新映射预览
+    updateMappingPreview();
 }
 
 function removeConfigurableNode(button) {
@@ -819,6 +838,132 @@ function updateMappingPreview() {
         } else {
             outputPreview.innerHTML = '<p class="text-muted">暂无输出节点</p>';
         }
+    }
+    
+    // 同时更新配置预览
+    updateConfigPreview();
+}
+
+// 更新配置预览
+function updateConfigPreview() {
+    const nameInput = document.querySelector('input[name="name"]');
+    const prefixInput = document.querySelector('input[name="prefix"]');
+    const descriptionInput = document.querySelector('textarea[name="description"]');
+    const versionInput = document.querySelector('input[name="version"]');
+    const authorInput = document.querySelector('input[name="author"]');
+    
+    const config = {
+        name: nameInput ? nameInput.value : '',
+        prefix: prefixInput ? prefixInput.value : '',
+        description: descriptionInput ? descriptionInput.value : '',
+        version: versionInput ? versionInput.value : '',
+        author: authorInput ? authorInput.value : '',
+        input_nodes: Array.from(document.querySelectorAll('select[name="input_nodes"]')).map(select => select.value).filter(v => v),
+        output_nodes: Array.from(document.querySelectorAll('select[name="output_nodes"]')).map(select => select.value).filter(v => v),
+        configurable_nodes: Array.from(document.querySelectorAll('select[name="configurable_nodes"]')).map(select => select.value).filter(v => v),
+        input_mappings: {},
+        output_mappings: {},
+        node_configs: {}
+    };
+    
+    // 自动生成输入输出映射
+    const inputNodes = Array.from(document.querySelectorAll('select[name="input_nodes"]'))
+        .map(select => select.value.trim())
+        .filter(v => v);
+    
+    const outputNodes = Array.from(document.querySelectorAll('select[name="output_nodes"]'))
+        .map(select => select.value.trim())
+        .filter(v => v);
+    
+    inputNodes.forEach(nodeId => {
+        config.input_mappings[nodeId] = {
+            parameter_name: "image",
+            type: "image",
+            description: "输入的原始图像"
+        };
+    });
+    
+    outputNodes.forEach(nodeId => {
+        config.output_mappings[nodeId] = {
+            parameter_name: "images",
+            type: "image",
+            description: "处理后的图像"
+        };
+    });
+    
+    // 构建节点配置
+    document.querySelectorAll('.param-item[data-node-id]').forEach(nodeItem => {
+        const nodeId = nodeItem.getAttribute('data-node-id');
+        config.node_configs[nodeId] = {};
+        
+        nodeItem.querySelectorAll('.param-config-item').forEach(paramItem => {
+            const paramName = paramItem.getAttribute('data-param-name');
+            const paramTypeSelect = paramItem.querySelector('select[name="param_type"]');
+            const paramType = paramTypeSelect ? paramTypeSelect.value : 'text';
+            
+            // 根据类型获取默认值
+            let defaultValue = null;
+            switch(paramType) {
+                case 'boolean':
+                    const checkbox = paramItem.querySelector('.param-default-boolean input[name="param_default"]');
+                    defaultValue = checkbox ? checkbox.checked : false;
+                    break;
+                case 'number':
+                    const numberInput = paramItem.querySelector('.param-default-number');
+                    defaultValue = numberInput && numberInput.value ? parseFloat(numberInput.value) : null;
+                    break;
+                default:
+                    const textInput = paramItem.querySelector('.param-default-text');
+                    defaultValue = textInput ? textInput.value || null : null;
+            }
+            
+            const descriptionTextarea = paramItem.querySelector('textarea[name="param_description"]');
+            const requiredCheckbox = paramItem.querySelector('input[name="param_required"]');
+            const minInput = paramItem.querySelector('input[name="param_min"]');
+            const maxInput = paramItem.querySelector('input[name="param_max"]');
+            
+            const paramConfig = {
+                type: paramType,
+                default: defaultValue,
+                description: descriptionTextarea ? descriptionTextarea.value || '' : '',
+                required: requiredCheckbox ? requiredCheckbox.checked : false
+            };
+            
+            const minVal = minInput ? minInput.value : '';
+            const maxVal = maxInput ? maxInput.value : '';
+            if (minVal) paramConfig.min = parseFloat(minVal);
+            if (maxVal) paramConfig.max = parseFloat(maxVal);
+            
+            const optionsInput = paramItem.querySelector('input[name="param_options"]');
+            const options = optionsInput ? optionsInput.value : '';
+            if (options) paramConfig.options = options.split(',').map(o => o.trim());
+            
+            const aliasesInput = paramItem.querySelector('input[name="param_aliases"]');
+            const aliases = aliasesInput ? aliasesInput.value : '';
+            if (aliases) paramConfig.aliases = aliases.split(',').map(a => a.trim());
+            
+            // 处理特殊功能
+            if (paramItem.querySelector('input[name="param_inject_models"]')?.checked) {
+                paramConfig.inject_models = true;
+            }
+            if (paramItem.querySelector('input[name="param_inject_loras"]')?.checked) {
+                paramConfig.inject_loras = true;
+            }
+            if (paramItem.querySelector('input[name="param_inject_samplers"]')?.checked) {
+                paramConfig.inject_samplers = true;
+            }
+            if (paramItem.querySelector('input[name="param_inject_schedulers"]')?.checked) {
+                paramConfig.inject_schedulers = true;
+            }
+            
+            config.node_configs[nodeId][paramName] = paramConfig;
+        });
+    });
+    
+    // 更新预览显示
+    const configPreview = document.getElementById('configPreview');
+    if (configPreview) {
+        configPreview.textContent = JSON.stringify(config, null, 2);
     }
 }
 
@@ -1370,6 +1515,32 @@ function initParamTypeControls(paramItem) {
     // 监听类型变化
     typeSelect.addEventListener('change', function() {
         updateParamTypeDisplay(paramItem, this.value);
+        updateConfigPreview(); // 更新配置预览
+    });
+    
+    // 为所有参数配置字段添加变化监听器
+    const paramFields = [
+        'textarea[name="param_description"]',
+        'input[name="param_required"]',
+        'input[name="param_min"]',
+        'input[name="param_max"]',
+        'input[name="param_options"]',
+        'input[name="param_aliases"]',
+        'input[name="param_inject_models"]',
+        'input[name="param_inject_loras"]',
+        'input[name="param_inject_samplers"]',
+        'input[name="param_inject_schedulers"]',
+        '.param-default-text',
+        '.param-default-number',
+        '.param-default-boolean input[name="param_default"]'
+    ];
+    
+    paramFields.forEach(selector => {
+        const elements = paramItem.querySelectorAll(selector);
+        elements.forEach(element => {
+            element.addEventListener('input', updateConfigPreview);
+            element.addEventListener('change', updateConfigPreview);
+        });
     });
     
     // 初始化显示状态
@@ -1426,6 +1597,8 @@ function updateBooleanLabel(checkbox) {
     if (label && label.classList.contains('boolean-label')) {
         label.textContent = checkbox.checked ? 'True' : 'False';
     }
+    // 更新配置预览
+    updateConfigPreview();
 }
 
 function removeParamConfig(button) {
@@ -1539,6 +1712,17 @@ document.addEventListener('DOMContentLoaded', function() {
         initParamTypeControls(paramItem);
     });
     
+    // 为基本表单字段添加变化监听器，以便实时更新配置预览
+    const basicFields = ['input[name="name"]', 'input[name="prefix"]', 'textarea[name="description"]', 
+                         'input[name="version"]', 'input[name="author"]'];
+    basicFields.forEach(selector => {
+        const element = document.querySelector(selector);
+        if (element) {
+            element.addEventListener('input', updateConfigPreview);
+            element.addEventListener('change', updateConfigPreview);
+        }
+    });
+    
     // 等待一小段时间确保所有DOM元素都完全加载
     setTimeout(() => {
         // 自动解析 Workflow JSON 中的节点
@@ -1550,6 +1734,7 @@ document.addEventListener('DOMContentLoaded', function() {
             setTimeout(() => {
                 restoreSavedNodeValues();
                 updateNodeTitles(); // 更新节点标题
+                updateConfigPreview(); // 更新配置预览
             }, 200); // 确保所有选择框都已填充选项
         }
     }, 100); // 确保模板渲染的选择框已完全创建
@@ -1622,11 +1807,11 @@ document.getElementById('workflowForm').addEventListener('submit', function(e) {
                     defaultValue = checkbox ? checkbox.checked : false;
                     break;
                 case 'number':
-                    const numberInput = paramItem.querySelector('.param-default-number input[name="param_default"]');
+                    const numberInput = paramItem.querySelector('.param-default-number');
                     defaultValue = numberInput && numberInput.value ? parseFloat(numberInput.value) : null;
                     break;
                 default:
-                    const textInput = paramItem.querySelector('.param-default-text input[name="param_default"]');
+                    const textInput = paramItem.querySelector('.param-default-text');
                     defaultValue = textInput ? textInput.value || null : null;
             }
             
