@@ -4,7 +4,9 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
 一个功能强大的 Astrbot 插件，集成了 ComfyUI AI 绘画功能，支持文生图、图生图、多服务器轮询、模型选择、LoRA 支持、自定义 Workflow 等高级功能。
-
+运行前先把这两个文件放到comfyui\custom_nodes!!!!!!!!!
+hilbert_image_encrypt
+image_compressor
 ## ✨ 主要特性
 
 ### 🎯 AI 绘画核心功能
