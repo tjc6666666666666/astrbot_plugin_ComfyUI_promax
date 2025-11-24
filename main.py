@@ -399,12 +399,6 @@ class ModComfyUI(Star):
             return str(content)
         except:
             return ""
-        
-        # 其他情况，尝试转换为字符串
-        try:
-            return str(message_content)
-        except:
-            return ""
 
     async def _delayed_recall(self, event, sent_message) -> None:
         """延迟撤回消息"""
@@ -490,7 +484,7 @@ class ModComfyUI(Star):
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id TEXT NOT NULL,
                         download_date TEXT NOT NULL,
-                        download_count INTEGER DEFAULT 1,
+                        download_count INTEGER DEFAULT 0,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(user_id, download_date)
@@ -523,6 +517,7 @@ class ModComfyUI(Star):
                     INSERT OR IGNORE INTO user_downloads (user_id, download_date, download_count)
                     VALUES (?, ?, 0)
                 ''', (user_id, today))
+                await conn.commit()  # 确保插入操作被提交
                 
                 # 查询当前下载次数
                 cursor = await conn.execute('''
@@ -545,6 +540,13 @@ class ModComfyUI(Star):
         try:
             today = datetime.now().strftime("%Y-%m-%d")
             async with aiosqlite.connect(self.db_path) as conn:
+                # 确保记录存在，如果不存在则插入
+                await conn.execute('''
+                    INSERT OR IGNORE INTO user_downloads (user_id, download_date, download_count)
+                    VALUES (?, ?, 0)
+                ''', (user_id, today))
+                
+                # 更新下载次数
                 await conn.execute('''
                     UPDATE user_downloads 
                     SET download_count = download_count + 1, updated_at = CURRENT_TIMESTAMP
@@ -754,7 +756,7 @@ class ModComfyUI(Star):
                 workflow_details.append(f"  • {name} (前缀: {prefix})")
         
         workflow_help = f"\n\n🔧 可用Workflow列表：\n" + "\n".join(workflow_details)
-        workflow_help += "\n\nWorkflow使用说明：\n  - 格式：<前缀> [参数名:值 ...]不会的加上help\n  - 支持中英文参数名和别名（如：width/宽度/w，sampler_name/采样器/sampler）\n  - 参数格式：参数名:值（例：宽度:800 或 采样器:euler）\n  - 具体支持的参数名请查看各workflow的配置说明"
+        workflow_help += "\n\nWorkflow使用说明：\n  - 格式：<前缀> [参数名:值 ...]\n  - 支持中英文参数名和别名（如：width/宽度/w，sampler_name/采样器/sampler）\n  - 参数格式：参数名:值（例：宽度:800 或 采样器:euler）\n  - 具体支持的参数名请查看各workflow的配置说明"
         
         return workflow_help
 
