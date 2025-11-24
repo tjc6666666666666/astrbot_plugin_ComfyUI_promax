@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ComfyUI AI 绘图机器人配置管理界面
+ComfyUI AI 绘图机器人配置管理界面，独立使用,自行安装flask
 Flask Web GUI for managing ComfyUI workflows and configurations
 """
 
@@ -642,4 +642,4 @@ if __name__ == '__main__':
     print(f"🌐 访问地址: http://localhost:7777")
     print("=" * 50)
     
-    app.run(host='0.0.0.0', port=7777, debug=True)
+    app.run(host='0.0.0.0', port=7777)
