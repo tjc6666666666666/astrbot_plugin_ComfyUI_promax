@@ -31,7 +31,7 @@ import base64
 
 # GUI配置管理界面相关导入
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_file, session
-import logging
+
 from functools import wraps
 
 @register(
@@ -3312,9 +3312,14 @@ class ModComfyUI(Star):
         except Exception as e:
             logger.error(f"清理临时文件时发生错误: {e}")
 
-    async def cleanup(self) -> None:
-        """显式清理资源"""
+    async def terminate(self) -> None:
+        """终止插件运行，清理所有资源（包括需要持续存在的GUI服务器）"""
         try:
+            logger.info("开始终止插件，清理所有资源...")
+            
+            # 停止GUI服务器（需要持续存在的资源）
+            self._stop_gui_server()
+            
             # 停止服务器监控
             if self.server_monitor_task and not self.server_monitor_task.done():
                 self.server_monitor_task.cancel()
@@ -3339,9 +3344,9 @@ class ModComfyUI(Star):
             # 清理临时文件
             await self.cleanup_temp_files()
             
-            logger.info("资源清理完成")
+            logger.info("插件终止完成，所有资源已清理")
         except Exception as e:
-            logger.error(f"资源清理时发生错误: {e}")
+            logger.error(f"插件终止时发生错误: {e}")
 
 
 
@@ -4507,11 +4512,8 @@ class ModComfyUI(Star):
         return self._config_manager
 
     async def cleanup(self) -> None:
-        """显式清理资源"""
+        """普通资源清理（不包括需要持续存在的GUI服务器）"""
         try:
-            # 停止GUI服务器
-            self._stop_gui_server()
-            
             # 停止服务器监控
             if self.server_monitor_task and not self.server_monitor_task.done():
                 self.server_monitor_task.cancel()
@@ -4536,7 +4538,7 @@ class ModComfyUI(Star):
             # 清理临时文件
             await self.cleanup_temp_files()
             
-            logger.info("资源清理完成")
+            logger.info("普通资源清理完成")
         except Exception as e:
             logger.error(f"资源清理时发生错误: {e}")
 
