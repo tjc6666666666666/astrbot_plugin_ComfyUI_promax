@@ -1,6 +1,6 @@
 name: astrbot_plugin_ComfyUI_promax
 desc: ComfyUI AI绘画插件-支持文生图、图生图、多服务器轮询、模型选择、LoRA等高级功能。
 help: 文生图：aimg <提示词> [宽X,高Y] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]\n图生图：img2img <提示词> [噪声:数值] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]] + 图片\n压缩包下载：comfyuioutput
-version: 3.2.1
+version: 3.2.2
 author: tjc123456
 repo: https://github.com/tjc6666666666666/astrbot_plugin_ComfyUI_promax
