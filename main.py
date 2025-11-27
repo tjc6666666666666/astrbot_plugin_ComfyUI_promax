@@ -3647,31 +3647,35 @@ class ModComfyUI(Star):
                     await self._send_with_auto_recall(event, event.plain_result("此workflow需要图片输入，请发送图片或引用包含图片的消息"))
                     return
                 
-                # 获取图片
+                # 获取所有图片
                 if has_image:
-                    image_seg = next(msg for msg in messages if isinstance(msg, Image))
+                    image_segs = [msg for msg in messages if isinstance(msg, Image)]
                 else:
-                    # 从回复中获取图片
-                    image_seg = next(seg for seg in reply_seg.chain if isinstance(seg, Image))
+                    # 从回复中获取所有图片
+                    image_segs = [seg for seg in reply_seg.chain if isinstance(seg, Image)]
                 
-                # 上传图片到ComfyUI服务器
-                try:
-                    # 选择可用的服务器
-                    upload_server = await self._get_next_available_server() or self._get_any_healthy_server()
-                    if not upload_server:
-                        await self._send_with_auto_recall(event, event.plain_result("当前没有可用的ComfyUI服务器"))
+                logger.info(f"检测到 {len(image_segs)} 张图片，开始上传")
+                
+                # 上传所有图片到ComfyUI服务器
+                for i, image_seg in enumerate(image_segs):
+                    try:
+                        # 选择可用的服务器
+                        upload_server = await self._get_next_available_server() or self._get_any_healthy_server()
+                        if not upload_server:
+                            await self._send_with_auto_recall(event, event.plain_result("当前没有可用的ComfyUI服务器"))
+                            return
+                        
+                        # 将图片转换为文件路径
+                        img_path = await image_seg.convert_to_file_path()
+                        image_filename = await self._upload_image_to_comfyui(upload_server, img_path)
+                    except Exception as e:
+                        await self._send_with_auto_recall(event, event.plain_result(f"图片上传失败：{str(e)[:1000]}"))
                         return
-                    
-                    # 将图片转换为文件路径
-                    img_path = await image_seg.convert_to_file_path()
-                    image_filename = await self._upload_image_to_comfyui(upload_server, img_path)
-                except Exception as e:
-                    await self._send_with_auto_recall(event, event.plain_result(f"图片上传失败：{str(e)[:1000]}"))
-                    return
-                if not image_filename:
-                    await self._send_with_auto_recall(event, event.plain_result("图片上传失败"))
-                    return
-                images.append(image_filename)
+                    if not image_filename:
+                        await self._send_with_auto_recall(event, event.plain_result("图片上传失败"))
+                        return
+                    images.append(image_filename)
+                    logger.info(f"成功上传第 {i+1} 张图片: {image_filename}")
 
             # 构建workflow
             final_workflow = self._build_workflow(workflow_data, config, params, images)
@@ -3896,12 +3900,64 @@ class ModComfyUI(Star):
         input_nodes = config.get("input_nodes", [])
         input_mappings = config.get("input_mappings", {})
         
+        # 用于跟踪已分配的图片索引
+        used_image_indices = set()
+        
+        logger.info(f"开始为workflow配置图片输入，共 {len(images)} 张图片")
+        
+        # 首先处理指定了image_index的节点
         for node_id in input_nodes:
             if node_id in input_mappings and node_id in final_workflow:
                 mapping = input_mappings[node_id]
                 param_name = mapping.get("parameter_name", "image")
                 if images and param_name == "image":
-                    final_workflow[node_id]["inputs"][param_name] = images[0]
+                    image_index = mapping.get("image_index")
+                    if image_index is not None:
+                        # 有明确指定image_index的节点
+                        image_mode = mapping.get("image_mode", "single")
+                        
+                        if image_mode == "single":
+                            if image_index < len(images):
+                                final_workflow[node_id]["inputs"][param_name] = images[image_index]
+                                used_image_indices.add(image_index)
+                                logger.info(f"节点 {node_id} 使用指定索引 {image_index} 的图片")
+                            else:
+                                final_workflow[node_id]["inputs"][param_name] = images[0]
+                                used_image_indices.add(0)
+                                logger.info(f"节点 {node_id} 索引超出范围，使用第一张图片")
+                        elif image_mode == "list":
+                            final_workflow[node_id]["inputs"][param_name] = images
+                            logger.info(f"节点 {node_id} 使用所有图片列表")
+                        elif image_mode == "all":
+                            final_workflow[node_id]["inputs"][param_name] = images
+                            logger.info(f"节点 {node_id} 使用全部图片")
+        
+        # 然后处理未指定image_index的节点，自动分配未使用的图片
+        current_image_index = 0
+        for node_id in input_nodes:
+            if node_id in input_mappings and node_id in final_workflow:
+                mapping = input_mappings[node_id]
+                param_name = mapping.get("parameter_name", "image")
+                if images and param_name == "image":
+                    image_index = mapping.get("image_index")
+                    if image_index is None:
+                        # 未指定image_index的节点，自动分配
+                        # 找到下一个未使用的图片索引
+                        while current_image_index in used_image_indices and current_image_index < len(images):
+                            current_image_index += 1
+                        
+                        if current_image_index < len(images):
+                            final_workflow[node_id]["inputs"][param_name] = images[current_image_index]
+                            used_image_indices.add(current_image_index)
+                            logger.info(f"节点 {node_id} 自动分配索引 {current_image_index} 的图片")
+                            current_image_index += 1
+                        else:
+                            # 没有更多图片了，使用第一张图片
+                            final_workflow[node_id]["inputs"][param_name] = images[0]
+                            used_image_indices.add(0)
+                            logger.info(f"节点 {node_id} 没有足够图片，使用第一张图片")
+        
+        logger.info(f"图片配置完成，使用了图片索引: {list(used_image_indices)}")
         
         # 创建参数名到别名的反向映射，用于快速查找
         param_to_aliases = {}
