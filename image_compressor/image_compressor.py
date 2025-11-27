@@ -75,8 +75,9 @@ class ImageCompressor:
         processed_images = []
         for pil_img in pil_images:
             original_width, original_height = pil_img.size
+            current_img = pil_img
             
-            # 2. 先处理「小于最小分辨率」的情况：按比例放大
+            # 第一步：处理最小分辨率约束（放大）
             if original_width < min_width or original_height < min_height:
                 # 计算「达到最小分辨率」所需的缩放比例（取较大值，确保宽高都达标）
                 width_ratio_min = min_width / original_width if original_width != 0 else 1.0
@@ -88,25 +89,24 @@ class ImageCompressor:
                 new_height = max(int(original_height * scale_ratio), min_height)
                 
                 # 高质量放大（LANCZOS算法支持放大和缩小）
-                resized_img = pil_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                current_img = current_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
             
-            # 3. 再处理「超过最大分辨率」的情况：按比例缩小
-            elif original_width > max_width or original_height > max_height:
+            # 第二步：处理最大分辨率约束（缩小）
+            current_width, current_height = current_img.size
+            if current_width > max_width or current_height > max_height:
                 # 计算「不超过最大分辨率」的缩放比例（取较小值，确保宽高都不超标）
-                width_ratio_max = max_width / original_width
-                height_ratio_max = max_height / original_height
+                width_ratio_max = max_width / current_width
+                height_ratio_max = max_height / current_height
                 scale_ratio = min(width_ratio_max, height_ratio_max)
                 
                 # 计算缩小后的尺寸，并二次确认不小于最小分辨率
-                new_width = max(int(original_width * scale_ratio), min_width)
-                new_height = max(int(original_height * scale_ratio), min_height)
+                new_width = max(int(current_width * scale_ratio), min_width)
+                new_height = max(int(current_height * scale_ratio), min_height)
                 
                 # 高质量缩小
-                resized_img = pil_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                current_img = current_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
             
-            # 4. 尺寸在 [min, max] 区间内：保持原图不变
-            else:
-                resized_img = pil_img
+            resized_img = current_img
             
             # 5. PIL转Tensor（保持原逻辑）
             img_np = np.array(resized_img).astype(np.float32) / 255.0
