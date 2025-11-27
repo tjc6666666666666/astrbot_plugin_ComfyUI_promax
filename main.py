@@ -29,6 +29,11 @@ import glob
 import io
 import base64
 
+# GUI配置管理界面相关导入
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_file, session
+import logging
+from functools import wraps
+
 @register(
     "mod-comfyui",
     "",
@@ -166,8 +171,27 @@ class ModComfyUI(Star):
         # 调试信息
         logger.info(f"主动撤回配置: 启用={self.enable_auto_recall}, 延迟={self.auto_recall_delay}秒")
 
+        # GUI配置管理界面配置
+        self.enable_gui = config.get("enable_gui", False)
+        self.gui_port = config.get("gui_port", 7777)
+        self.gui_username = config.get("gui_username", "123")
+        self.gui_password = config.get("gui_password", "123")
+        
+        # Flask应用和GUI相关
+        self.app = None
+        self.gui_thread: Optional[threading.Thread] = None
+        self.gui_running = False
+        
+        # 配置路径
+        self.config_dir = Path(__file__).parent
+        self.workflow_dir = self.config_dir / "workflow"
+        self.main_config_file = self.config_dir / "config.json"
+        
+        # 如果启用GUI，则初始化Flask应用
+        if self.enable_gui:
+            self._init_gui()
+
         # Workflow模块配置
-        self.workflow_dir = os.path.join(os.path.dirname(__file__), "workflow")
         self.workflows: Dict[str, Dict[str, Any]] = {}
         self.workflow_prefixes: Dict[str, str] = {}  # prefix -> workflow_name
         # 将在初始化任务中异步加载
@@ -196,6 +220,10 @@ class ModComfyUI(Star):
         
         # 启动ComfyUI服务器监控（将在监控中启动worker）
         self.server_monitor_task = asyncio.create_task(self._start_server_monitor())
+        
+        # 启动GUI服务器（如果启用）
+        if self.enable_gui:
+            self._start_gui_server()
 
     def _ensure_directory_exists(self, dir_path: Union[str, Path], dir_name: str = "directory") -> None:
         """确保目录存在，如果存在为文件则备份并创建目录"""
@@ -787,8 +815,8 @@ class ModComfyUI(Star):
         """发送图片格式的workflow帮助信息"""
         try:
             # 检查是否已有缓存的帮助图片
-            workflow_dir = os.path.join(self.workflow_dir, workflow_name)
-            help_image_path = os.path.join(workflow_dir, "help.png")
+            workflow_dir = self.workflow_dir / workflow_name
+            help_image_path = workflow_dir / "help.png"
             
             if os.path.exists(help_image_path):
                 # 使用缓存的图片，传递文件路径
@@ -802,7 +830,7 @@ class ModComfyUI(Star):
             
             if image_data:
                 # 保存图片到缓存
-                os.makedirs(workflow_dir, exist_ok=True)
+                workflow_dir.mkdir(parents=True, exist_ok=True)
                 def write_help_image():
                     with open(help_image_path, 'wb') as f:
                         f.write(image_data)
@@ -1536,6 +1564,33 @@ class ModComfyUI(Star):
             return ", ".join(models)
         return None
 
+    def _is_lora_not_found_error(self, error_msg: str) -> bool:
+        """检查错误是否是LoRA不存在的错误"""
+        return ("value_not_in_list" in error_msg and 
+                "lora_name" in error_msg and 
+                "not in" in error_msg)
+
+    def _extract_lora_name_from_error(self, error_msg: str) -> Optional[str]:
+        """从错误信息中提取LoRA名称"""
+        import re
+        # 匹配类似 "lora_name: '1234' not in" 的模式
+        match = re.search(r"lora_name:\s*['\"]([^'\"]+)['\"]\s*not in", error_msg)
+        if match:
+            return match.group(1)
+        return None
+
+    def _get_available_loras_from_error(self, error_msg: str) -> Optional[str]:
+        """从错误信息中提取可用LoRA列表"""
+        import re
+        # 匹配类似 "not in ['lora1.safetensors', 'lora2.safetensors']" 的模式
+        match = re.search(r"not in\s*\[([^\]]+)\]", error_msg)
+        if match:
+            loras_str = match.group(1)
+            # 移除引号并分割
+            loras = [lora.strip().strip("'\"") for lora in loras_str.split(",")]
+            return ", ".join(loras)
+        return None
+
     def _build_comfyui_prompt(
         self,
         prompt: str,
@@ -1740,6 +1795,34 @@ class ModComfyUI(Star):
                             raise Exception(f"模型「{model_name}」未安装到服务器【{server.name}】上，请安装该模型。\n可用模型：{available_models}")
                         else:
                             raise Exception(f"指定的模型未安装到服务器【{server.name}】上，请检查模型配置。")
+                    
+                    # 检查是否是LoRA不存在的错误，如果是则不重试
+                    if self._is_lora_not_found_error(error_msg):
+                        lora_name = self._extract_lora_name_from_error(error_msg)
+                        available_loras = self._get_available_loras_from_error(error_msg)
+                        if lora_name and available_loras:
+                            # 提取可用的LoRA描述名称
+                            available_lora_descs = []
+                            for lora_file in available_loras.split(", "):
+                                lora_file = lora_file.strip()
+                                # 从self.lora_name_map中查找对应的描述
+                                for filename, desc in self.lora_name_map.values():
+                                    if filename == lora_file and desc:
+                                        available_lora_descs.append(desc)
+                                        break
+                                else:
+                                    # 如果找不到描述，使用文件名
+                                    available_lora_descs.append(lora_file)
+                            
+                            error_msg = f"LoRA「{lora_name}」未安装到服务器【{server.name}】上。\n"
+                            if available_lora_descs:
+                                error_msg += f"可用LoRA：{', '.join(available_lora_descs)}\n"
+                                error_msg += f"使用方法：lora:<LoRA描述名>（如：lora:{available_lora_descs[0]}）"
+                            else:
+                                error_msg += "请检查LoRA配置。"
+                            raise Exception(error_msg)
+                        else:
+                            raise Exception(f"指定的LoRA未安装到服务器【{server.name}】上，请检查LoRA配置。")
                     
                     # 检查是否是节点不存在的错误，如果是则不重试
                     if self._is_node_not_found_error(error_msg):
@@ -3416,25 +3499,25 @@ class ModComfyUI(Star):
             loop = asyncio.get_event_loop()
             
             # 检查并创建workflow目录
-            if not await loop.run_in_executor(None, os.path.exists, self.workflow_dir):
-                await loop.run_in_executor(None, os.makedirs, self.workflow_dir, True)
+            if not await loop.run_in_executor(None, self.workflow_dir.exists):
+                await loop.run_in_executor(None, self.workflow_dir.mkdir, parents=True, exist_ok=True)
                 logger.info(f"创建workflow目录: {self.workflow_dir}")
                 return
 
             # 获取workflow列表
-            workflow_names = await loop.run_in_executor(None, os.listdir, self.workflow_dir)
+            workflow_names = await loop.run_in_executor(None, lambda: [f.name for f in self.workflow_dir.iterdir()])
             
             for workflow_name in workflow_names:
-                workflow_path = os.path.join(self.workflow_dir, workflow_name)
-                if not await loop.run_in_executor(None, os.path.isdir, workflow_path):
+                workflow_path = self.workflow_dir / workflow_name
+                if not await loop.run_in_executor(None, workflow_path.is_dir):
                     continue
 
-                config_file = os.path.join(workflow_path, "config.json")
-                workflow_file = os.path.join(workflow_path, "workflow.json")
+                config_file = workflow_path / "config.json"
+                workflow_file = workflow_path / "workflow.json"
 
                 # 检查文件是否存在
-                config_exists = await loop.run_in_executor(None, os.path.exists, config_file)
-                workflow_exists = await loop.run_in_executor(None, os.path.exists, workflow_file)
+                config_exists = await loop.run_in_executor(None, config_file.exists)
+                workflow_exists = await loop.run_in_executor(None, workflow_file.exists)
                 
                 if not config_exists or not workflow_exists:
                     logger.warning(f"workflow {workflow_name} 缺少必要文件，跳过")
@@ -4030,3 +4113,579 @@ class ModComfyUI(Star):
                 final_workflow["30"]["inputs"]["ckpt_name"] = self.ckpt_name
         
         return final_workflow
+
+    def _init_gui(self) -> None:
+        """初始化Flask GUI应用"""
+        try:
+            # 创建Flask应用
+            self.app = Flask(__name__)
+            # 使用动态生成密钥
+            self.app.secret_key = os.environ.get('FLASK_SECRET_KEY') or os.urandom(24)
+            
+            # 配置日志
+            gui_logger = logging.getLogger('flask_app')
+            gui_logger.setLevel(logging.INFO)
+            
+            # 设置模板目录
+            template_dir = self.config_dir / "templates"
+            if template_dir.exists():
+                self.app.template_folder = str(template_dir)
+            
+            # 注册路由
+            self._register_gui_routes()
+            
+            logger.info(f"Flask GUI应用初始化成功，端口: {self.gui_port}")
+            
+        except Exception as e:
+            logger.error(f"初始化GUI失败: {e}")
+            self.enable_gui = False
+
+    def _register_gui_routes(self) -> None:
+        """注册GUI路由"""
+        
+        def login_required(f):
+            """登录验证装饰器"""
+            @wraps(f)
+            def decorated_function(*args, **kwargs):
+                if 'logged_in' not in session:
+                    return redirect(url_for('login'))
+                return f(*args, **kwargs)
+            return decorated_function
+
+        @self.app.route('/login', methods=['GET', 'POST'])
+        def login():
+            """登录页面"""
+            if request.method == 'POST':
+                username = request.form.get('username', '')
+                password = request.form.get('password', '')
+                
+                if username == self.gui_username and password == self.gui_password:
+                    session['logged_in'] = True
+                    flash('登录成功！', 'success')
+                    return redirect(url_for('index'))
+                else:
+                    flash('用户名或密码错误！', 'error')
+            
+            return render_template('login.html')
+
+        @self.app.route('/logout')
+        def logout():
+            """登出"""
+            session.pop('logged_in', None)
+            flash('已退出登录！', 'info')
+            return redirect(url_for('login'))
+
+        @self.app.route('/')
+        @login_required
+        def index():
+            """主页 - 显示所有工作流"""
+            workflows = self.config_manager.get_workflows()
+            return render_template('index.html', workflows=workflows)
+
+        @self.app.route('/main_config')
+        @login_required
+        def main_config():
+            """主配置页面"""
+            config = self.config_manager.load_main_config()
+            return render_template('main_config.html', config=config)
+
+        @self.app.route('/save_main_config', methods=['POST'])
+        @login_required
+        def save_main_config():
+            """保存主配置"""
+            try:
+                config = request.form.to_dict()
+                
+                # 处理特殊字段
+                config['cfg'] = float(config.get('cfg', 7.0))
+                config['default_width'] = int(config.get('default_width', 1024))
+                config['default_height'] = int(config.get('default_height', 1024))
+                config['num_inference_steps'] = int(config.get('num_inference_steps', 30))
+                config['default_denoise'] = float(config.get('default_denoise', 0.7))
+                config['txt2img_batch_size'] = int(config.get('txt2img_batch_size', 1))
+                config['img2img_batch_size'] = int(config.get('img2img_batch_size', 1))
+                config['max_txt2img_batch'] = int(config.get('max_txt2img_batch', 6))
+                config['max_img2img_batch'] = int(config.get('max_img2img_batch', 6))
+                config['max_task_queue'] = int(config.get('max_task_queue', 10))
+                config['min_width'] = int(config.get('min_width', 64))
+                config['max_width'] = int(config.get('max_width', 2000))
+                config['min_height'] = int(config.get('min_height', 64))
+                config['max_height'] = int(config.get('max_height', 2000))
+                config['queue_check_delay'] = int(config.get('queue_check_delay', 30))
+                config['queue_check_interval'] = int(config.get('queue_check_interval', 5))
+                config['empty_queue_max_retry'] = int(config.get('empty_queue_max_retry', 2))
+                config['help_server_port'] = int(config.get('help_server_port', 8080))
+                config['daily_download_limit'] = int(config.get('daily_download_limit', 1))
+                config['max_concurrent_tasks_per_user'] = int(config.get('max_concurrent_tasks_per_user', 3))
+                config['gui_port'] = int(config.get('gui_port', 7777))
+                
+                # 处理布尔字段
+                config['enable_translation'] = config.get('enable_translation') == 'on'
+                config['enable_image_encrypt'] = config.get('enable_image_encrypt') == 'on'
+                config['enable_help_image'] = config.get('enable_help_image') == 'on'
+                config['enable_auto_save'] = config.get('enable_auto_save') == 'on'
+                config['enable_output_zip'] = config.get('enable_output_zip') == 'on'
+                config['only_own_images'] = config.get('only_own_images') == 'on'
+                config['enable_auto_recall'] = config.get('enable_auto_recall') == 'on'
+                config['enable_gui'] = config.get('enable_gui') == 'on'
+                
+                # 处理数组字段
+                comfyui_urls = request.form.getlist('comfyui_url')
+                config['comfyui_url'] = [url.strip() for url in comfyui_urls if url.strip()]
+                
+                lora_configs = request.form.getlist('lora_config')
+                config['lora_config'] = [lora.strip() for lora in lora_configs if lora.strip()]
+                
+                model_configs = request.form.getlist('model_config')
+                config['model_config'] = [model.strip() for model in model_configs if model.strip()]
+                
+                if self.config_manager.save_main_config(config):
+                    flash('主配置保存成功！', 'success')
+                else:
+                    flash('主配置保存失败！', 'error')
+                    
+                return redirect(url_for('main_config'))
+                
+            except Exception as e:
+                logger.error(f"保存主配置失败: {e}")
+                flash(f'保存失败: {str(e)}', 'error')
+                return redirect(url_for('main_config'))
+
+        @self.app.route('/workflow/<workflow_name>')
+        @login_required
+        def workflow_detail(workflow_name):
+            """工作流详情页面"""
+            workflows = self.config_manager.get_workflows()
+            workflow = None
+            
+            for wf in workflows:
+                if wf['name'] == workflow_name:
+                    workflow = wf
+                    break
+            
+            if not workflow:
+                flash('工作流不存在！', 'error')
+                return redirect(url_for('index'))
+            
+            return render_template('workflow_detail.html', workflow=workflow)
+
+        @self.app.route('/workflow/<workflow_name>/edit')
+        @login_required
+        def workflow_edit(workflow_name):
+            """编辑工作流页面"""
+            workflows = self.config_manager.get_workflows()
+            workflow = None
+            
+            for wf in workflows:
+                if wf['name'] == workflow_name:
+                    workflow = wf
+                    break
+            
+            if not workflow:
+                flash('工作流不存在！', 'error')
+                return redirect(url_for('index'))
+            
+            return render_template('workflow_edit.html', workflow=workflow)
+
+        @self.app.route('/workflow/<workflow_name>/save', methods=['POST'])
+        @login_required
+        def workflow_save(workflow_name):
+            """保存工作流配置"""
+            try:
+                # 获取表单数据
+                config = json.loads(request.form.get('config', '{}'))
+                workflow_data = json.loads(request.form.get('workflow', '{}'))
+                
+                if self.config_manager.save_workflow(workflow_name, config, workflow_data):
+                    flash('工作流保存成功！', 'success')
+                else:
+                    flash('工作流保存失败！', 'error')
+                    
+                return redirect(url_for('workflow_detail', workflow_name=workflow_name))
+                
+            except Exception as e:
+                logger.error(f"保存工作流失败: {e}")
+                flash(f'保存失败: {str(e)}', 'error')
+                return redirect(url_for('workflow_edit', workflow_name=workflow_name))
+
+        @self.app.route('/workflow/new')
+        @login_required
+        def workflow_new():
+            """新建工作流页面"""
+            return render_template('workflow_new.html')
+
+        @self.app.route('/workflow/create', methods=['POST'])
+        @login_required
+        def workflow_create():
+            """创建新工作流"""
+            try:
+                workflow_name = request.form.get('workflow_name', '').strip()
+                
+                if not workflow_name:
+                    flash('工作流名称不能为空！', 'error')
+                    return redirect(url_for('workflow_new'))
+                
+                # 检查工作流是否已存在
+                workflow_path = self.workflow_dir / workflow_name
+                if workflow_path.exists():
+                    flash('工作流已存在！', 'error')
+                    return redirect(url_for('workflow_new'))
+                
+                # 获取配置数据
+                input_nodes = request.form.getlist('input_nodes')
+                output_nodes = request.form.getlist('output_nodes')
+                
+                # 自动生成输入输出映射
+                input_mappings = {}
+                output_mappings = {}
+                
+                # 为每个输入节点生成映射
+                for node_id in input_nodes:
+                    input_mappings[node_id] = {
+                        "parameter_name": "image",
+                        "required": True,
+                        "type": "image",
+                        "description": "输入图片"
+                    }
+                
+                # 为每个输出节点生成映射
+                for node_id in output_nodes:
+                    output_mappings[node_id] = {
+                        "parameter_name": "images",
+                        "type": "image",
+                        "description": "处理后的图片"
+                    }
+                
+                config = {
+                    "name": request.form.get('name', workflow_name),
+                    "prefix": request.form.get('prefix', ''),
+                    "description": request.form.get('description', ''),
+                    "version": request.form.get('version', '1.0.0'),
+                    "author": request.form.get('author', 'ComfyUI Plugin'),
+                    "input_nodes": input_nodes,
+                    "output_nodes": output_nodes,
+                    "input_mappings": input_mappings,
+                    "output_mappings": output_mappings,
+                    "configurable_nodes": request.form.getlist('configurable_nodes'),
+                    "node_configs": {}
+                }
+                
+                # 解析输入输出映射
+                input_mappings = request.form.get('input_mappings', '{}')
+                if input_mappings:
+                    config['input_mappings'] = json.loads(input_mappings)
+                    
+                output_mappings = request.form.get('output_mappings', '{}')
+                if output_mappings:
+                    config['output_mappings'] = json.loads(output_mappings)
+                
+                # 解析节点配置
+                node_configs = request.form.get('node_configs', '{}')
+                if node_configs:
+                    config['node_configs'] = json.loads(node_configs)
+                
+                # 创建空的 workflow 数据
+                workflow_data = {}
+                
+                if self.config_manager.save_workflow(workflow_name, config, workflow_data):
+                    flash('工作流创建成功！', 'success')
+                    return redirect(url_for('workflow_detail', workflow_name=workflow_name))
+                else:
+                    flash('工作流创建失败！', 'error')
+                    return redirect(url_for('workflow_new'))
+                    
+            except Exception as e:
+                logger.error(f"创建工作流失败: {e}")
+                flash(f'创建失败: {str(e)}', 'error')
+                return redirect(url_for('workflow_new'))
+
+        @self.app.route('/workflow/<workflow_name>/delete', methods=['POST'])
+        @login_required
+        def workflow_delete(workflow_name):
+            """删除工作流"""
+            try:
+                if self.config_manager.delete_workflow(workflow_name):
+                    flash('工作流删除成功！', 'success')
+                else:
+                    flash('工作流删除失败！', 'error')
+            except Exception as e:
+                logger.error(f"删除工作流失败: {e}")
+                flash(f'删除失败: {str(e)}', 'error')
+            
+            return redirect(url_for('index'))
+
+    def _start_gui_server(self) -> None:
+        """启动GUI服务器"""
+        if not self.enable_gui or not self.app:
+            return
+            
+        def run_gui():
+            try:
+                logger.info(f"启动ComfyUI配置管理界面...")
+                logger.info(f"配置目录: {self.config_dir}")
+                logger.info(f"工作流目录: {self.workflow_dir}")
+                logger.info(f"访问地址: http://0.0.0.0:{self.gui_port}")
+                logger.info(f"管理员账号: {self.gui_username}")
+                logger.info("=" * 50)
+                
+                # 尝试使用不同的WSGI服务器
+                try:
+                    import importlib
+                    gunicorn_spec = importlib.util.find_spec("gunicorn")
+                    if gunicorn_spec is None:
+                        raise ImportError("Gunicorn not found")
+                    from gunicorn.app.base import BaseApplication
+                    
+                    class GunicornApp(BaseApplication):
+                        def __init__(self, app, options=None):
+                            self.options = options or {}
+                            self.application = app
+                            super().__init__()
+                        
+                        def load_config(self):
+                            config = {key: value for key, value in self.options.items()
+                                     if key in self.cfg.settings and value is not None}
+                            for key, value in config.items():
+                                self.cfg.set(key.lower(), value)
+                        
+                        def load(self):
+                            return self.application
+                    
+                    options = {
+                        'bind': f'0.0.0.0:{self.gui_port}',
+                        'workers': 2,
+                        'threads': 2,
+                        'worker_class': 'gthread',
+                        'timeout': 120,
+                        'keepalive': 2,
+                        'max_requests': 1000,
+                        'max_requests_jitter': 100,
+                        'preload_app': True,
+                        'accesslog': '-',
+                        'errorlog': '-',
+                        'loglevel': 'info'
+                    }
+                    
+                    GunicornApp(self.app, options).run()
+                    
+                except ImportError:
+                    logger.info("Gunicorn 不可用，尝试使用 Waitress...")
+                    try:
+                        from waitress import serve
+                        logger.info("使用 Waitress WSGI 服务器")
+                        serve(self.app, host='0.0.0.0', port=self.gui_port, threads=4)
+                    except ImportError:
+                        logger.info("未安装 Waitress，使用 Flask 开发服务器")
+                        self.app.run(host='0.0.0.0', port=self.gui_port, debug=False, threaded=True)
+                        
+            except Exception as e:
+                logger.error(f"GUI服务器启动失败: {e}")
+        
+        # 在新线程中启动GUI服务器
+        self.gui_thread = threading.Thread(target=run_gui, daemon=True)
+        self.gui_thread.start()
+        self.gui_running = True
+        logger.info("GUI服务器已启动")
+
+    def _stop_gui_server(self) -> None:
+        """停止GUI服务器"""
+        if self.gui_running and self.gui_thread:
+            logger.info("正在停止GUI服务器...")
+            # 注意：由于在独立线程中运行，这里只是标记
+            self.gui_running = False
+            logger.info("GUI服务器已停止")
+
+    @property
+    def config_manager(self):
+        """配置管理器属性"""
+        if not hasattr(self, '_config_manager'):
+            self._config_manager = ConfigManager(
+                self.config_dir,
+                self.workflow_dir,
+                self.main_config_file
+            )
+        return self._config_manager
+
+    async def cleanup(self) -> None:
+        """显式清理资源"""
+        try:
+            # 停止GUI服务器
+            self._stop_gui_server()
+            
+            # 停止服务器监控
+            if self.server_monitor_task and not self.server_monitor_task.done():
+                self.server_monitor_task.cancel()
+                try:
+                    await self.server_monitor_task
+                except asyncio.CancelledError:
+                    pass
+            
+            # 停止所有服务器worker
+            for server in self.comfyui_servers:
+                if server.worker and not server.worker.done():
+                    server.worker.cancel()
+                    try:
+                        await server.worker
+                    except asyncio.CancelledError:
+                        pass
+                    server.worker = None
+            
+            # 停止帮助服务器
+            await self._stop_help_server()
+            
+            # 清理临时文件
+            await self.cleanup_temp_files()
+            
+            logger.info("资源清理完成")
+        except Exception as e:
+            logger.error(f"资源清理时发生错误: {e}")
+
+
+class ConfigManager:
+    """配置管理器"""
+    
+    def __init__(self, config_dir: Path, workflow_dir: Path, main_config_file: Path):
+        self.config_dir = config_dir
+        self.workflow_dir = workflow_dir
+        self.main_config_file = main_config_file
+        
+    def load_main_config(self) -> Dict[str, Any]:
+        """加载主配置文件"""
+        try:
+            if self.main_config_file.exists():
+                with open(self.main_config_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            else:
+                # 返回默认配置
+                return self.get_default_main_config()
+        except Exception as e:
+            logger.error(f"加载主配置失败: {e}")
+            return self.get_default_main_config()
+    
+    def save_main_config(self, config: Dict[str, Any]) -> bool:
+        """保存主配置文件"""
+        try:
+            with open(self.main_config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            logger.error(f"保存主配置失败: {e}")
+            return False
+    
+    def get_default_main_config(self) -> Dict[str, Any]:
+        """获取默认主配置"""
+        return {
+            "comfyui_url": ["http://127.0.0.1:8188,本地服务器"],
+            "ckpt_name": "sd_xl_base_1.0.safetensors",
+            "sampler_name": "euler",
+            "scheduler": "simple",
+            "cfg": 7.0,
+            "negative_prompt": "bad quality,worst quality,worst detail, watermark, text",
+            "default_width": 1024,
+            "default_height": 1024,
+            "num_inference_steps": 30,
+            "seed": "随机",
+            "enable_translation": False,
+            "default_denoise": 0.7,
+            "open_time_ranges": "7:00-8:00,11:00-14:00,17:00-24:00",
+            "enable_image_encrypt": True,
+            "txt2img_batch_size": 1,
+            "img2img_batch_size": 1,
+            "max_txt2img_batch": 6,
+            "max_img2img_batch": 6,
+            "max_task_queue": 10,
+            "min_width": 64,
+            "max_width": 2000,
+            "min_height": 64,
+            "max_height": 2000,
+            "queue_check_delay": 30,
+            "queue_check_interval": 5,
+            "empty_queue_max_retry": 2,
+            "lora_config": [],
+            "model_config": [],
+            "enable_help_image": True,
+            "help_server_port": 8080,
+            "enable_auto_save": False,
+            "auto_save_directory": "output",
+            "enable_output_zip": True,
+            "daily_download_limit": 1,
+            "only_own_images": False,
+            "db_directory": "output",
+            "max_concurrent_tasks_per_user": 3,
+            "enable_auto_recall": False,
+            "auto_recall_delay": 20,
+            "enable_gui": False,
+            "gui_port": 7777,
+            "gui_username": "123",
+            "gui_password": "123"
+        }
+    
+    def get_workflows(self) -> List[Dict[str, Any]]:
+        """获取所有工作流列表"""
+        workflows = []
+        
+        if not self.workflow_dir.exists():
+            return workflows
+            
+        for workflow_name in [f.name for f in self.workflow_dir.iterdir()]:
+            workflow_path = self.workflow_dir / workflow_name
+            if not workflow_path.is_dir():
+                continue
+                
+            config_file = workflow_path / "config.json"
+            workflow_file = workflow_path / "workflow.json"
+            
+            if not config_file.exists() or not workflow_file.exists():
+                continue
+            
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                
+                with open(workflow_file, 'r', encoding='utf-8') as f:
+                    workflow_data = json.load(f)
+                
+                workflows.append({
+                    "name": workflow_name,
+                    "config": config,
+                    "workflow": workflow_data,
+                    "workflow_json_pretty": json.dumps(workflow_data, ensure_ascii=False, indent=2),
+                    "path": str(workflow_path)
+                })
+            except Exception as e:
+                logger.error(f"加载工作流 {workflow_name} 失败: {e}")
+        
+        return workflows
+    
+    def save_workflow(self, workflow_name: str, config: Dict[str, Any], 
+                     workflow_data: Dict[str, Any]) -> bool:
+        """保存工作流"""
+        try:
+            workflow_path = self.workflow_dir / workflow_name
+            workflow_path.mkdir(exist_ok=True)
+            
+            config_file = workflow_path / "config.json"
+            workflow_file = workflow_path / "workflow.json"
+            
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            
+            with open(workflow_file, 'w', encoding='utf-8') as f:
+                json.dump(workflow_data, f, ensure_ascii=False, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"保存工作流 {workflow_name} 失败: {e}")
+            return False
+    
+    def delete_workflow(self, workflow_name: str) -> bool:
+        """删除工作流"""
+        try:
+            workflow_path = self.workflow_dir / workflow_name
+            if workflow_path.exists() and workflow_path.is_dir():
+                shutil.rmtree(workflow_path)
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"删除工作流 {workflow_name} 失败: {e}")
+            return False
