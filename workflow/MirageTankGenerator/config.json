@@ -1,0 +1,62 @@
+{
+  "name": "幻影坦克生成器",
+  "prefix": "幻影坦克",
+  "description": "",
+  "version": "1.0.0",
+  "author": "ComfyUI Plugin",
+  "input_nodes": [
+    "34",
+    "35"
+  ],
+  "output_nodes": [
+    "37"
+  ],
+  "configurable_nodes": [
+    "33"
+  ],
+  "input_mappings": {
+    "34": {
+      "parameter_name": "image",
+      "type": "image",
+      "description": "输入的原始图像"
+    },
+    "35": {
+      "parameter_name": "image",
+      "type": "image",
+      "description": "输入的原始图像"
+    }
+  },
+  "output_mappings": {
+    "37": {
+      "parameter_name": "images",
+      "type": "image",
+      "description": "处理后的图像"
+    }
+  },
+  "node_configs": {
+    "33": {
+      "mode": {
+        "type": "select",
+        "default": "gray",
+        "description": "",
+        "required": false,
+        "options": [
+          "gray",
+          "color"
+        ]
+      },
+      "param_a": {
+        "type": "number",
+        "default": 5,
+        "description": "\n如果表图（白色背景）看不清：适当增大 param_a，或减小 param_b。\n如果里图（黑色背景）看不清：适当增大 param_b，或减小 param_a。\n彩色模式下，这两个参数的作用逻辑和灰度模式一致，只是作用于 RGB \n三个通道，调节效果会更复杂，需要根据实际图像色彩微调。\n",
+        "required": false
+      },
+      "param_b": {
+        "type": "number",
+        "default": 5,
+        "description": "\n如果表图（白色背景）看不清：适当增大 param_a，或减小 param_b。\n如果里图（黑色背景）看不清：适当增大 param_b，或减小 param_a。\n彩色模式下，这两个参数的作用逻辑和灰度模式一致，只是作用于 RGB \n三个通道，调节效果会更复杂，需要根据实际图像色彩微调。\n",
+        "required": false
+      }
+    }
+  }
+}

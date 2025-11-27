@@ -1,0 +1,52 @@
+{
+  "33": {
+    "inputs": {
+      "mode": "color",
+      "param_a": 5,
+      "param_b": 5,
+      "front_image": [
+        "34",
+        0
+      ],
+      "back_image": [
+        "35",
+        0
+      ]
+    },
+    "class_type": "MirageTankGenerator",
+    "_meta": {
+      "title": "幻影坦克生成器"
+    }
+  },
+  "34": {
+    "inputs": {
+      "image": "mccloud_temp (101).jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "35": {
+    "inputs": {
+      "image": "mccloud_temp (37).jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "37": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "33",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  }
+}
