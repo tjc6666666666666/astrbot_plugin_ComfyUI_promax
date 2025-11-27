@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ComfyUI AI 绘图机器人配置管理界面，独立使用,自行安装flask
+ComfyUI AI 绘图机器人配置管理界面
 Flask Web GUI for managing ComfyUI workflows and configurations
 """
 
@@ -12,8 +12,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_file
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_file, session
 import logging
+from functools import wraps
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -21,6 +22,19 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = 'comfyui_config_gui_secret_key_2024'
+
+# 简单的用户认证配置
+USERNAME = "123"
+PASSWORD = "123"
+
+def login_required(f):
+    """登录验证装饰器"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'logged_in' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 # 配置路径
 CONFIG_DIR = Path(__file__).parent
@@ -178,7 +192,33 @@ class ConfigManager:
 config_manager = ConfigManager()
 
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """登录页面"""
+    if request.method == 'POST':
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        
+        if username == USERNAME and password == PASSWORD:
+            session['logged_in'] = True
+            flash('登录成功！', 'success')
+            return redirect(url_for('index'))
+        else:
+            flash('用户名或密码错误！', 'error')
+    
+    return render_template('login.html')
+
+
+@app.route('/logout')
+def logout():
+    """登出"""
+    session.pop('logged_in', None)
+    flash('已退出登录！', 'info')
+    return redirect(url_for('login'))
+
+
 @app.route('/')
+@login_required
 def index():
     """主页 - 显示所有工作流"""
     workflows = config_manager.get_workflows()
@@ -186,6 +226,7 @@ def index():
 
 
 @app.route('/main_config')
+@login_required
 def main_config():
     """主配置页面"""
     config = config_manager.load_main_config()
@@ -193,6 +234,7 @@ def main_config():
 
 
 @app.route('/save_main_config', methods=['POST'])
+@login_required
 def save_main_config():
     """保存主配置"""
     try:
@@ -252,6 +294,7 @@ def save_main_config():
 
 
 @app.route('/workflow/<workflow_name>')
+@login_required
 def workflow_detail(workflow_name):
     """工作流详情页面"""
     workflows = config_manager.get_workflows()
@@ -270,6 +313,7 @@ def workflow_detail(workflow_name):
 
 
 @app.route('/workflow/<workflow_name>/edit')
+@login_required
 def workflow_edit(workflow_name):
     """编辑工作流页面"""
     workflows = config_manager.get_workflows()
@@ -288,6 +332,7 @@ def workflow_edit(workflow_name):
 
 
 @app.route('/workflow/<workflow_name>/save', methods=['POST'])
+@login_required
 def workflow_save(workflow_name):
     """保存工作流配置"""
     try:
@@ -309,12 +354,14 @@ def workflow_save(workflow_name):
 
 
 @app.route('/workflow/new')
+@login_required
 def workflow_new():
     """新建工作流页面"""
     return render_template('workflow_new.html')
 
 
 @app.route('/workflow/create', methods=['POST'])
+@login_required
 def workflow_create():
     """创建新工作流"""
     try:
@@ -400,6 +447,7 @@ def workflow_create():
 
 
 @app.route('/workflow/<workflow_name>/delete', methods=['POST'])
+@login_required
 def workflow_delete(workflow_name):
     """删除工作流"""
     try:
@@ -415,6 +463,7 @@ def workflow_delete(workflow_name):
 
 
 @app.route('/api/workflow_templates')
+@login_required
 def api_workflow_templates():
     """获取工作流模板"""
     templates = [
@@ -636,10 +685,73 @@ def api_workflow_templates():
 
 
 if __name__ == '__main__':
-    print("🚀 启动 ComfyUI 配置管理界面...")
-    print(f"📁 配置目录: {CONFIG_DIR}")
-    print(f"🔧 工作流目录: {WORKFLOW_DIR}")
-    print(f"🌐 访问地址: http://localhost:7777")
-    print("=" * 50)
+    import sys
     
-    app.run(host='0.0.0.0', port=7777)
+    # 检查是否使用开发服务器
+    if '--dev' in sys.argv or '--development' in sys.argv:
+        # 开发模式：多线程开发服务器
+        print("🚀 启动 ComfyUI 配置管理界面 (开发模式)...")
+        print(f"📁 配置目录: {CONFIG_DIR}")
+        print(f"🔧 工作流目录: {WORKFLOW_DIR}")
+        print(f"🌐 访问地址: http://localhost:7777")
+        print("=" * 50)
+        
+        app.run(host='0.0.0.0', port=7777, debug=True, threaded=True)
+    else:
+        # 默认生产模式：使用多进程+多线程
+        print("🚀 启动 ComfyUI 配置管理界面 (生产模式)...")
+        print(f"📁 配置目录: {CONFIG_DIR}")
+        print(f"🔧 工作流目录: {WORKFLOW_DIR}")
+        print(f"🌐 访问地址: http://0.0.0.0:7777")
+        print("💡 使用 --dev 参数启动开发模式")
+        print("=" * 50)
+        
+        try:
+            import importlib
+            gunicorn_spec = importlib.util.find_spec("gunicorn")
+            if gunicorn_spec is None:
+                raise ImportError("Gunicorn not found")
+            from gunicorn.app.base import BaseApplication
+            
+            class GunicornApp(BaseApplication):
+                def __init__(self, app, options=None):
+                    self.options = options or {}
+                    self.application = app
+                    super().__init__()
+                
+                def load_config(self):
+                    config = {key: value for key, value in self.options.items()
+                             if key in self.cfg.settings and value is not None}
+                    for key, value in config.items():
+                        self.cfg.set(key.lower(), value)
+                
+                def load(self):
+                    return self.application
+            
+            options = {
+                'bind': '0.0.0.0:7777',
+                'workers': 4,  # 进程数
+                'threads': 2,  # 每个进程的线程数
+                'worker_class': 'gthread',
+                'timeout': 120,
+                'keepalive': 2,
+                'max_requests': 1000,
+                'max_requests_jitter': 100,
+                'preload_app': True,
+                'accesslog': '-',
+                'errorlog': '-',
+                'loglevel': 'info'
+            }
+            
+            GunicornApp(app, options).run()
+            
+        except ImportError:
+            print("❌ Gunicorn 不可用，尝试使用 Waitress...")
+            try:
+                from waitress import serve
+                print("✅ 使用 Waitress WSGI 服务器 (生产模式)")
+                serve(app, host='0.0.0.0', port=7777, threads=4)
+            except ImportError:
+                print("❌ 未安装 Waitress，请运行: pip install waitress")
+                print("🔄 回退到开发模式...")
+                app.run(host='0.0.0.0', port=7777, debug=False, threaded=True)
