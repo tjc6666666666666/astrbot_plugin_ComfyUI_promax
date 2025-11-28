@@ -1,0 +1,382 @@
+/* 全局样式 */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f8f9fa;
+}
+
+/* 导航栏样式 */
+.navbar-brand {
+    font-weight: bold;
+    font-size: 1.5rem;
+}
+
+.navbar-nav .nav-link {
+    transition: all 0.3s ease;
+}
+
+.navbar-nav .nav-link:hover {
+    background-color: rgba(255,255,255,0.1);
+    border-radius: 0.375rem;
+}
+
+/* 卡片样式 */
+.card {
+    border: none;
+    border-radius: 1rem;
+    box-shadow: 0 0.125rem 0.25rem rgba(0,0,0,0.075);
+    transition: all 0.3s ease;
+}
+
+.card:hover {
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15);
+    transform: translateY(-2px);
+}
+
+.card-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 1rem 1rem 0 0 !important;
+    border: none;
+}
+
+/* 表单样式 */
+.form-control, .form-select {
+    border-radius: 0.5rem;
+    border: 1px solid #e0e0e0;
+    transition: all 0.3s ease;
+}
+
+.form-control:focus, .form-select:focus {
+    border-color: #667eea;
+    box-shadow: 0 0 0 0.2rem rgba(102,126,234,0.25);
+}
+
+/* 按钮样式 */
+.btn {
+    border-radius: 0.5rem;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+}
+
+.btn-primary:hover {
+    background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 0.25rem 0.5rem rgba(0,0,0,0.15);
+}
+
+.btn-outline-primary:hover {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-color: #667eea;
+}
+
+/* LoRA容器样式 */
+.lora-item {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.lora-select {
+    flex: 1;
+}
+
+.lora-strength {
+    width: 100px;
+}
+
+/* 图片预览样式 */
+.image-preview {
+    max-width: 200px;
+    max-height: 200px;
+    border-radius: 0.5rem;
+    border: 2px solid #e0e0e0;
+    margin-top: 0.5rem;
+}
+
+/* 服务器状态样式 */
+.server-status {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 0.5rem;
+}
+
+.server-status.online {
+    background-color: #28a745;
+    box-shadow: 0 0 0 2px rgba(40,167,69,0.25);
+}
+
+.server-status.offline {
+    background-color: #dc3545;
+    box-shadow: 0 0 0 2px rgba(220,53,69,0.25);
+}
+
+.server-status.busy {
+    background-color: #ffc107;
+    box-shadow: 0 0 0 2px rgba(255,193,7,0.25);
+}
+
+/* 工作流卡片样式 */
+.workflow-card {
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.workflow-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 1rem 2rem rgba(0,0,0,0.15);
+}
+
+.workflow-card .card-title {
+    color: #333;
+    font-weight: 600;
+}
+
+.workflow-card .badge {
+    font-size: 0.75rem;
+}
+
+/* 历史记录样式 */
+.history-item {
+    border-left: 4px solid #667eea;
+    background-color: white;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    transition: all 0.3s ease;
+}
+
+.history-item:hover {
+    box-shadow: 0 0.25rem 0.5rem rgba(0,0,0,0.1);
+    transform: translateX(5px);
+}
+
+.history-image {
+    max-width: 150px;
+    max-height: 150px;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.history-image:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15);
+}
+
+/* 加载动画样式 */
+.loading-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(102,126,234,0.3);
+    border-radius: 50%;
+    border-top-color: #667eea;
+    animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Toast样式 */
+.toast {
+    border-radius: 0.5rem;
+    border: none;
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15);
+}
+
+.toast-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 0.5rem 0.5rem 0 0;
+}
+
+/* 模态框样式 */
+.modal-content {
+    border: none;
+    border-radius: 1rem;
+    box-shadow: 0 1rem 3rem rgba(0,0,0,0.175);
+}
+
+.modal-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 1rem 1rem 0 0;
+    border: none;
+}
+
+.modal-header .btn-close {
+    filter: invert(1);
+}
+
+/* 结果展示样式 */
+.result-image {
+    max-width: 100%;
+    height: auto;
+    border-radius: 0.5rem;
+    box-shadow: 0 0.25rem 0.5rem rgba(0,0,0,0.1);
+    margin-bottom: 1rem;
+}
+
+.result-info {
+    background-color: #f8f9fa;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+/* 进度条样式 */
+.progress {
+    height: 0.5rem;
+    border-radius: 0.25rem;
+    background-color: rgba(255,255,255,0.3);
+}
+
+.progress-bar {
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+    .container-fluid {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+    
+    .card {
+        margin-bottom: 1rem;
+    }
+    
+    .lora-item {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .lora-select,
+    .lora-strength {
+        width: 100%;
+        margin-bottom: 0.5rem;
+    }
+    
+    .history-image {
+        max-width: 100px;
+        max-height: 100px;
+    }
+}
+
+/* 深色模式支持 */
+@media (prefers-color-scheme: dark) {
+    body {
+        background-color: #1a1a1a;
+        color: #e0e0e0;
+    }
+    
+    .card {
+        background-color: #2d2d2d;
+        color: #e0e0e0;
+    }
+    
+    .form-control,
+    .form-select {
+        background-color: #3d3d3d;
+        border-color: #4d4d4d;
+        color: #e0e0e0;
+    }
+    
+    .form-control:focus,
+    .form-select:focus {
+        background-color: #3d3d3d;
+        border-color: #667eea;
+        color: #e0e0e0;
+    }
+    
+    .history-item {
+        background-color: #2d2d2d;
+        color: #e0e0e0;
+    }
+    
+    .result-info {
+        background-color: #2d2d2d;
+        color: #e0e0e0;
+    }
+}
+
+/* 动画效果 */
+.fade-in {
+    animation: fadeIn 0.5s ease-in;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.slide-in {
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(0); }
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+}
+
+/* 工具提示样式 */
+.tooltip {
+    font-size: 0.875rem;
+}
+
+.tooltip-inner {
+    background-color: #333;
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.75rem;
+}
+
+/* 徽章样式 */
+.badge {
+    font-weight: 500;
+    border-radius: 0.375rem;
+}
+
+/* 分页样式 */
+.pagination .page-link {
+    border-radius: 0.375rem;
+    margin: 0 0.125rem;
+    border: 1px solid #dee2e6;
+    color: #667eea;
+}
+
+.pagination .page-item.active .page-link {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-color: #667eea;
+}
+
+.pagination .page-link:hover {
+    color: #5a6fd8;
+    background-color: #f8f9fa;
+}
