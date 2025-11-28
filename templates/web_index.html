@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ComfyUI AI绘画</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="/static/css/main.css" rel="stylesheet">
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="bi bi-palette-fill"></i>
+                ComfyUI AI绘画
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="#" data-page="txt2img">
+                            <i class="bi bi-image"></i> 文生图
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" data-page="img2img">
+                            <i class="bi bi-image-fill"></i> 图生图
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" data-page="workflows">
+                            <i class="bi bi-diagram-3"></i> 工作流
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" data-page="history">
+                            <i class="bi bi-clock-history"></i> 历史记录
+                        </a>
+                    </li>
+                </ul>
+                <ul class="navbar-nav">
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-person-circle"></i>
+                            <span id="username">用户</span>
+                        </a>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="#" data-page="settings">
+                                <i class="bi bi-gear"></i> 设置
+                            </a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="#" onclick="logout()">
+                                <i class="bi bi-box-arrow-right"></i> 退出登录
+                            </a></li>
+                        </ul>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 主要内容区域 -->
+    <main class="container-fluid py-4">
+        <!-- 登录页面 -->
+        <div id="loginPage" class="row justify-content-center">
+            <div class="col-md-6 col-lg-4">
+                <div class="card shadow">
+                    <div class="card-body">
+                        <h3 class="card-title text-center mb-4">
+                            <i class="bi bi-palette-fill text-primary"></i>
+                            ComfyUI AI绘画
+                        </h3>
+                        <form id="loginForm">
+                            <div class="mb-3">
+                                <label for="loginUsername" class="form-label">用户名</label>
+                                <input type="text" class="form-control" id="loginUsername" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="loginPassword" class="form-label">密码</label>
+                                <input type="password" class="form-control" id="loginPassword" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">
+                                <i class="bi bi-box-arrow-in-right"></i> 登录
+                            </button>
+                        </form>
+                        <div class="text-center mt-3">
+                            <small class="text-muted">
+                                没有账户？
+                                <a href="#" onclick="showRegister()">立即注册</a>
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 注册页面 -->
+        <div id="registerPage" class="row justify-content-center" style="display: none;">
+            <div class="col-md-6 col-lg-4">
+                <div class="card shadow">
+                    <div class="card-body">
+                        <h3 class="card-title text-center mb-4">
+                            <i class="bi bi-person-plus-fill text-success"></i>
+                            注册账户
+                        </h3>
+                        <form id="registerForm">
+                            <div class="mb-3">
+                                <label for="registerUsername" class="form-label">用户名</label>
+                                <input type="text" class="form-control" id="registerUsername" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="registerPassword" class="form-label">密码</label>
+                                <input type="password" class="form-control" id="registerPassword" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="confirmPassword" class="form-label">确认密码</label>
+                                <input type="password" class="form-control" id="confirmPassword" required>
+                            </div>
+                            <button type="submit" class="btn btn-success w-100">
+                                <i class="bi bi-person-plus"></i> 注册
+                            </button>
+                        </form>
+                        <div class="text-center mt-3">
+                            <small class="text-muted">
+                                已有账户？
+                                <a href="#" onclick="showLogin()">立即登录</a>
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 应用页面 -->
+        <div id="appPages" style="display: none;">
+            <!-- 文生图页面 -->
+            <div id="txt2imgPage" class="page">
+                <div class="row">
+                    <div class="col-lg-8">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5 class="card-title mb-0">
+                                    <i class="bi bi-image"></i> 文生图
+                                </h5>
+                            </div>
+                            <div class="card-body">
+                                <form id="txt2imgForm">
+                                    <div class="mb-3">
+                                        <label for="prompt" class="form-label">提示词</label>
+                                        <textarea class="form-control" id="prompt" rows="3" 
+                                                placeholder="请输入图片描述，例如：a beautiful landscape, anime style"></textarea>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <label for="negativePrompt" class="form-label">反向提示词</label>
+                                        <textarea class="form-control" id="negativePrompt" rows="2" 
+                                                placeholder="不希望出现的内容，例如：blurry, low quality"></textarea>
+                                    </div>
+                                    
+                                    <div class="row">
+                                        <div class="col-md-3">
+                                            <label for="width" class="form-label">宽度</label>
+                                            <select class="form-select" id="width">
+                                                <option value="512">512</option>
+                                                <option value="768">768</option>
+                                                <option value="1024">1024</option>
+                                                <option value="1280">1280</option>
+                                                <option value="1536">1536</option>
+                                                <option value="1792">1792</option>
+                                                <option value="2048">2048</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label for="height" class="form-label">高度</label>
+                                            <select class="form-select" id="height">
+                                                <option value="512">512</option>
+                                                <option value="768">768</option>
+                                                <option value="1024">1024</option>
+                                                <option value="1280">1280</option>
+                                                <option value="1536">1536</option>
+                                                <option value="1792">1792</option>
+                                                <option value="2048">2048</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label for="batchSize" class="form-label">批量数量</label>
+                                            <input type="number" class="form-control" id="batchSize" value="1" min="1" max="4">
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label for="seed" class="form-label">种子</label>
+                                            <input type="number" class="form-control" id="seed" placeholder="随机">
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" id="randomSeed" checked>
+                                                <label class="form-check-label" for="randomSeed">随机种子</label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="row mt-3">
+                                        <div class="col-md-4">
+                                            <label for="model" class="form-label">模型</label>
+                                            <select class="form-select" id="model">
+                                                <option value="">默认模型</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label for="sampler" class="form-label">采样器</label>
+                                            <select class="form-select" id="sampler">
+                                                <!-- 采样器选项将通过JavaScript动态加载 -->
+                                            </select>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label for="scheduler" class="form-label">调度器</label>
+                                            <select class="form-select" id="scheduler">
+                                                <!-- 调度器选项将通过JavaScript动态加载 -->
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="mt-3">
+                                        <label class="form-label">LoRA模型</label>
+                                        <div id="loraContainer" class="border rounded p-2">
+                                            <div class="lora-item mb-2">
+                                                <select class="form-select lora-select">
+                                                    <option value="">选择LoRA</option>
+                                                </select>
+                                                <input type="number" class="form-control lora-strength" placeholder="强度" min="0" max="2" step="0.1">
+                                                <button type="button" class="btn btn-sm btn-danger" onclick="removeLora(this)">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addLora()">
+                                            <i class="bi bi-plus"></i> 添加LoRA
+                                        </button>
+                                    </div>
+                                    
+                                    <div class="mt-3">
+                                        <button type="submit" class="btn btn-primary">
+                                            <i class="bi bi-magic"></i> 生成图片
+                                        </button>
+                                        <button type="button" class="btn btn-outline-secondary" onclick="resetTxt2ImgForm()">
+                                            <i class="bi bi-arrow-clockwise"></i> 重置
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-lg-4">
+                        <div class="card">
+                            <div class="card-header">
+                                <h6 class="card-title mb-0">
+                                    <i class="bi bi-info-circle"></i> 服务器状态
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <div id="serverStatus">
+                                    <div class="text-center">
+                                        <div class="spinner-border text-primary" role="status">
+                                            <span class="visually-hidden">加载中...</span>
+                                        </div>
+                                        <p class="mt-2">检查服务器状态中...</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="card mt-3">
+                            <div class="card-header">
+                                <h6 class="card-title mb-0">
+                                    <i class="bi bi-lightning"></i> 快速操作
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="d-grid gap-2">
+                                    <button class="btn btn-outline-info btn-sm" onclick="loadExamplePrompts()">
+                                        <i class="bi bi-lightbulb"></i> 示例提示词
+                                    </button>
+                                    <button class="btn btn-outline-success btn-sm" onclick="saveToHistory()">
+                                        <i class="bi bi-bookmark"></i> 保存配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 图生图页面 -->
+            <div id="img2imgPage" class="page" style="display: none;">
+                <div class="row">
+                    <div class="col-lg-8">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5 class="card-title mb-0">
+                                    <i class="bi bi-image-fill"></i> 图生图
+                                </h5>
+                            </div>
+                            <div class="card-body">
+                                <form id="img2imgForm">
+                                    <div class="mb-3">
+                                        <label for="inputImage" class="form-label">输入图片</label>
+                                        <input type="file" class="form-control" id="inputImage" accept="image/*" required>
+                                        <div id="imagePreview" class="mt-2"></div>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <label for="img2imgPrompt" class="form-label">提示词</label>
+                                        <textarea class="form-control" id="img2imgPrompt" rows="3" 
+                                                placeholder="请输入图片描述，例如：a beautiful anime girl"></textarea>
+                                    </div>
+                                    
+                                    <div class="row">
+                                        <div class="col-md-3">
+                                            <label for="denoise" class="form-label">噪声强度</label>
+                                            <input type="range" class="form-range" id="denoise" min="0" max="1" step="0.05" value="0.7">
+                                            <small class="text-muted">当前值: <span id="denoiseValue">0.7</span></small>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label for="img2imgBatchSize" class="form-label">批量数量</label>
+                                            <input type="number" class="form-control" id="img2imgBatchSize" value="1" min="1" max="4">
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label for="img2imgSeed" class="form-label">种子</label>
+                                            <input type="number" class="form-control" id="img2imgSeed" placeholder="随机">
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" id="img2imgRandomSeed" checked>
+                                                <label class="form-check-label" for="img2imgRandomSeed">随机种子</label>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label for="img2imgModel" class="form-label">模型</label>
+                                            <select class="form-select" id="img2imgModel">
+                                                <option value="">默认模型</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="row mt-3">
+                                        <div class="col-md-4">
+                                            <label for="img2imgSampler" class="form-label">采样器</label>
+                                            <select class="form-select" id="img2imgSampler">
+                                                <!-- 采样器选项将通过JavaScript动态加载 -->
+                                            </select>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label for="img2imgScheduler" class="form-label">调度器</label>
+                                            <select class="form-select" id="img2imgScheduler">
+                                                <!-- 调度器选项将通过JavaScript动态加载 -->
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="mt-3">
+                                        <label class="form-label">LoRA模型</label>
+                                        <div id="img2imgLoraContainer" class="border rounded p-2">
+                                            <div class="lora-item mb-2">
+                                                <select class="form-select img2img-lora-select">
+                                                    <option value="">选择LoRA</option>
+                                                </select>
+                                                <input type="number" class="form-control lora-strength" placeholder="强度" min="0" max="2" step="0.1">
+                                                <button type="button" class="btn btn-sm btn-danger" onclick="removeImg2ImgLora(this)">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <button type="button" class="btn btn-sm btn-outline-primary mt-2" onclick="addImg2ImgLora()">
+                                            <i class="bi bi-plus"></i> 添加LoRA
+                                        </button>
+                                    </div>
+                                    
+                                    <div class="mt-3">
+                                        <button type="submit" class="btn btn-primary">
+                                            <i class="bi bi-magic"></i> 生成图片
+                                        </button>
+                                        <button type="button" class="btn btn-outline-secondary" onclick="resetImg2ImgForm()">
+                                            <i class="bi bi-arrow-clockwise"></i> 重置
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 工作流页面 -->
+            <div id="workflowsPage" class="page" style="display: none;">
+                <div class="row">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5 class="card-title mb-0">
+                                    <i class="bi bi-diagram-3"></i> 自定义工作流
+                                </h5>
+                            </div>
+                            <div class="card-body">
+                                <div id="workflowsContainer" class="row">
+                                    <!-- 工作流卡片将在这里动态生成 -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 历史记录页面 -->
+            <div id="historyPage" class="page" style="display: none;">
+                <div class="row">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5 class="card-title mb-0">
+                                    <i class="bi bi-clock-history"></i> 生成历史
+                                </h5>
+                            </div>
+                            <div class="card-body">
+                                <div id="historyContainer">
+                                    <!-- 历史记录将在这里显示 -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 设置页面 -->
+            <div id="settingsPage" class="page" style="display: none;">
+                <div class="row">
+                    <div class="col-md-8">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5 class="card-title mb-0">
+                                    <i class="bi bi-gear"></i> 设置
+                                </h5>
+                            </div>
+                            <div class="card-body">
+                                <h6>用户信息</h6>
+                                <div class="mb-3">
+                                    <label class="form-label">用户名</label>
+                                    <input type="text" class="form-control" id="settingsUsername" readonly>
+                                </div>
+                                
+                                <h6>默认设置</h6>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <label for="defaultWidth" class="form-label">默认宽度</label>
+                                        <select class="form-select" id="defaultWidth">
+                                            <option value="512">512</option>
+                                            <option value="768">768</option>
+                                            <option value="1024">1024</option>
+                                            <option value="1280">1280</option>
+                                            <option value="1536">1536</option>
+                                            <option value="1792">1792</option>
+                                            <option value="2048">2048</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="defaultHeight" class="form-label">默认高度</label>
+                                        <select class="form-select" id="defaultHeight">
+                                            <option value="512">512</option>
+                                            <option value="768">768</option>
+                                            <option value="1024">1024</option>
+                                            <option value="1280">1280</option>
+                                            <option value="1536">1536</option>
+                                            <option value="1792">1792</option>
+                                            <option value="2048">2048</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                
+                                <div class="mt-3">
+                                    <button type="button" class="btn btn-primary" onclick="saveSettings()">
+                                        <i class="bi bi-check"></i> 保存设置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 结果展示区域 -->
+        <div id="resultModal" class="modal fade" tabindex="-1">
+            <div class="modal-dialog modal-xl">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">生成结果</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="resultContainer">
+                            <!-- 生成结果将在这里显示 -->
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                        <button type="button" class="btn btn-primary" onclick="downloadAllImages()">
+                            <i class="bi bi-download"></i> 下载所有图片
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 提示消息容器 -->
+    <div id="toastContainer" class="position-fixed top-0 end-0 p-3" style="z-index: 11"></div>
+
+    <!-- 加载遮罩 -->
+    <div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 align-items-center justify-content-center" 
+         style="background-color: rgba(0,0,0,0.5); z-index: 9999; display: none !important;">
+        <div class="text-center text-white">
+            <div class="spinner-border mb-3" role="status"></div>
+            <p>正在生成图片，请稍候...</p>
+            <div class="progress" style="width: 300px;">
+                <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                     role="progressbar" style="width: 0%"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/web_app.js"></script>
+</body>
+</html>
