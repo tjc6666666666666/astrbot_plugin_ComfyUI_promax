@@ -28,11 +28,15 @@ import glob
 
 import io
 import base64
+import requests
+from io import BytesIO
 
 # GUI配置管理界面相关导入
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_file, session
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_file, session, send_from_directory
 
 from functools import wraps
+import time
+
 
 @register(
     "mod-comfyui",
@@ -85,6 +89,65 @@ class ModComfyUI(Star):
         self.ckpt_name = config.get("ckpt_name")
         self.sampler_name = config.get("sampler_name")
         self.scheduler = config.get("scheduler")
+        
+        # 采样器配置列表
+        self.available_samplers = [
+            "euler",
+            "euler_cfg_pp", 
+            "euler_ancestral",
+            "euler_ancestral_cfg_pp",
+            "heun",
+            "heunpp2",
+            "dpm_2",
+            "dpm_2_ancestral",
+            "lms",
+            "dpm_fast",
+            "dpm_adaptive",
+            "dpmpp_2s_ancestral",
+            "dpmpp_2s_ancestral_cfg_pp",
+            "dpmpp_sde",
+            "dpmpp_sde_gpu",
+            "dpmpp_2m",
+            "dpmpp_2m_cfg_pp",
+            "dpmpp_2m_sde",
+            "dpmpp_2m_sde_gpu",
+            "dpmpp_2m_sde_heun",
+            "dpmpp_2m_sde_heun_gpu",
+            "dpmpp_3m_sde",
+            "dpmpp_3m_sde_gpu",
+            "ddpm",
+            "lcm",
+            "ipndm",
+            "ipndm_v",
+            "deis",
+            "res_multistep",
+            "res_multistep_cfg_pp",
+            "res_multistep_ancestral",
+            "res_multistep_ancestral_cfg_pp",
+            "gradient_estimation",
+            "gradient_estimation_cfg_pp",
+            "er_sde",
+            "seeds_2",
+            "seeds_3",
+            "sa_solver",
+            "sa_solver_pece",
+            "ddim",
+            "uni_pc",
+            "uni_pc_bh2"
+        ]
+        
+        # 调度器配置列表
+        self.available_schedulers = [
+            "simple",
+            "sgm_uniform",
+            "karras",
+            "exponential",
+            "ddim_uniform",
+            "beta",
+            "normal",
+            "linear_quadratic",
+            "kl_optimal"
+        ]
         self.cfg = config.get("cfg")
         self.negative_prompt = config.get("negative_prompt", "")
         self.default_width = config.get("default_width")
@@ -182,6 +245,17 @@ class ModComfyUI(Star):
         self.gui_thread: Optional[threading.Thread] = None
         self.gui_running = False
         
+        # Web API配置
+        self.enable_web_api = config.get("enable_web_api", False)
+        self.web_api_port = config.get("web_api_port", 7778)
+        self.web_api_allow_register = config.get("web_api_allow_register", True)
+        self.web_api_image_proxy = config.get("web_api_image_proxy", True)  # 是否启用图片代理
+        
+        # Web API Flask应用
+        self.web_api_app = None
+        self.web_api_thread: Optional[threading.Thread] = None
+        self.web_api_running = False
+        
         # 配置路径
         self.config_dir = Path(__file__).parent
         self.workflow_dir = self.config_dir / "workflow"
@@ -190,6 +264,10 @@ class ModComfyUI(Star):
         # 如果启用GUI，则初始化Flask应用
         if self.enable_gui:
             self._init_gui()
+        
+        # 如果启用Web API，则初始化Web API应用
+        if self.enable_web_api:
+            self._init_web_api()
 
         # Workflow模块配置
         self.workflows: Dict[str, Dict[str, Any]] = {}
@@ -224,6 +302,10 @@ class ModComfyUI(Star):
         # 启动GUI服务器（如果启用）
         if self.enable_gui:
             self._start_gui_server()
+        
+        # 启动Web API服务器（如果启用）
+        if self.enable_web_api:
+            self._start_web_api_server()
 
     def _ensure_directory_exists(self, dir_path: Union[str, Path], dir_name: str = "directory") -> None:
         """确保目录存在，如果存在为文件则备份并创建目录"""
@@ -671,6 +753,24 @@ class ModComfyUI(Star):
                 logger.debug(f"LoRA兼容映射：文件名前缀「{filename_prefix}」→ 描述「{desc}」")
         return lora_map
 
+    def _get_unique_lora_descriptions(self) -> List[str]:
+        """获取唯一的LoRA描述列表（用于Web API）"""
+        if not self.lora_name_map:
+            return []
+        
+        # 使用集合来确保LoRA描述的唯一性，按原始配置顺序返回
+        seen_descriptions = set()
+        unique_descriptions = []
+        
+        for key, (filename, desc) in self.lora_name_map.items():
+            # 只添加第一次出现的每个描述
+            if desc not in seen_descriptions:
+                seen_descriptions.add(desc)
+                # 格式：描述，文件名
+                unique_descriptions.append(f"{desc}，{filename}")
+        
+        return unique_descriptions
+
     def _generate_lora_list_desc(self) -> str:
         if not self.lora_name_map:
             return "  暂无可用LoRA"
@@ -712,6 +812,24 @@ class ModComfyUI(Star):
                 model_map[filename_prefix] = (filename, desc)
                 logger.debug(f"模型兼容映射：文件名前缀「{filename_prefix}」→ 描述「{desc}」")
         return model_map
+
+    def _get_unique_model_descriptions(self) -> List[str]:
+        """获取唯一的模型描述列表（用于Web API）"""
+        if not self.model_name_map:
+            return []
+        
+        # 使用集合来确保模型描述的唯一性，按原始配置顺序返回
+        seen_descriptions = set()
+        unique_descriptions = []
+        
+        for key, (filename, desc) in self.model_name_map.items():
+            # 只添加第一次出现的每个描述
+            if desc not in seen_descriptions:
+                seen_descriptions.add(desc)
+                # 格式：描述，文件名
+                unique_descriptions.append(f"{desc}，{filename}")
+        
+        return unique_descriptions
 
     def _generate_model_list_desc(self) -> str:
         """生成模型列表描述"""
@@ -1766,6 +1884,8 @@ class ModComfyUI(Star):
         last_error = None
         user_id = task_data.get("user_id")  # 获取用户ID
         is_workflow = task_data.get("is_workflow", False)
+        is_web_api = task_data.get("is_web_api", False)
+        task_id = task_data.get("task_id")
         
         try:
             while retry_count <= max_retries:
@@ -1775,7 +1895,10 @@ class ModComfyUI(Star):
                         raise Exception(f"服务器{server.name}已不健康，无法处理任务")
                         
                     # 处理任务
-                    if is_workflow:
+                    if is_web_api:
+                        # Web API任务处理
+                        await self._process_web_api_task(server, task_data)
+                    elif is_workflow:
                         # 过滤掉 is_workflow 参数，避免传递给 _process_workflow_task
                         workflow_task_data = {k: v for k, v in task_data.items() if k != 'is_workflow'}
                         await self._process_workflow_task(server, **workflow_task_data)
@@ -1856,6 +1979,331 @@ class ModComfyUI(Star):
                 await self._decrement_user_task_count(user_id)
             # 确保释放服务器
             await self._mark_server_busy(server, False)
+
+    async def _process_web_api_task(self, server: ServerState, task_data: Dict[str, Any]) -> None:
+        """处理Web API任务"""
+        task_id = task_data.get("task_id")
+        task_type = task_data.get("type")
+        user_id = task_data.get("user_id")
+        
+        try:
+            if task_type == "txt2img":
+                result = await self._process_web_api_txt2img(server, task_data)
+            elif task_type == "img2img":
+                result = await self._process_web_api_img2img(server, task_data)
+            elif task_type == "workflow":
+                result = await self._process_web_api_workflow(server, task_data)
+            else:
+                result = {
+                    'error': f'不支持的任务类型: {task_type}'
+                }
+            
+            # 存储任务结果
+            if not hasattr(self, '_task_results'):
+                self._task_results = {}
+            self._task_results[task_id] = result
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"处理Web API任务失败: {error_msg}")
+            
+            # 尝试解析JSON格式的错误信息
+            try:
+                if error_msg.startswith('{') and error_msg.endswith('}'):
+                    error_json = json.loads(error_msg)
+                    if 'error' in error_json:
+                        error_details = error_json['error']
+                        if isinstance(error_details, dict):
+                            error_type = error_details.get('type', '')
+                            error_message = error_details.get('message', '')
+                            node_errors = error_details.get('node_errors', {})
+                            
+                            # 如果有节点错误，提取第一个节点的错误
+                            if node_errors and isinstance(node_errors, dict):
+                                first_node_id = list(node_errors.keys())[0]
+                                first_node_error = node_errors[first_node_id]
+                                if 'errors' in first_node_error and first_node_error['errors']:
+                                    first_error = first_node_error['errors'][0]
+                                    error_type = first_error.get('type', error_type)
+                                    error_message = first_error.get('message', error_message)
+                            
+                            # 更新错误消息用于后续处理
+                            if error_type or error_message:
+                                error_msg = f"{error_type}: {error_message}" if error_type and error_message else (error_type or error_message)
+            except:
+                # 如果JSON解析失败，使用原始错误消息
+                pass
+            
+            # 检查是否是模型不存在的错误，提供更友好的错误信息
+            if self._is_model_not_found_error(error_msg):
+                model_name = self._extract_model_name_from_error(error_msg)
+                available_models = self._get_available_models_from_error(error_msg)
+                if model_name and available_models:
+                    friendly_error = f"❌ 模型错误：模型「{model_name}」未安装到服务器【{server.name}】\n\n📋 可用模型列表：\n{available_models}\n\n💡 请使用上述可用模型之一重试。"
+                else:
+                    friendly_error = f"❌ 模型错误：指定的模型未安装到服务器【{server.name}】\n\n💡 请检查模型配置或联系管理员。"
+                self._task_results[task_id] = {'error': friendly_error}
+            # 检查是否是LoRA不存在的错误
+            elif self._is_lora_not_found_error(error_msg):
+                lora_name = self._extract_lora_name_from_error(error_msg)
+                available_loras = self._get_available_loras_from_error(error_msg)
+                if lora_name and available_loras:
+                    friendly_error = f"❌ LoRA错误：LoRA「{lora_name}」未安装到服务器【{server.name}】\n\n📋 可用LoRA列表：\n{available_loras}\n\n💡 请使用上述可用LoRA之一重试，或移除LoRA参数。"
+                else:
+                    friendly_error = f"❌ LoRA错误：指定的LoRA未安装到服务器【{server.name}】\n\n💡 请检查LoRA配置或移除LoRA参数重试。"
+                self._task_results[task_id] = {'error': friendly_error}
+            # 检查是否是节点不存在的错误
+            elif self._is_node_not_found_error(error_msg):
+                node_name = self._extract_node_name_from_error(error_msg)
+                if node_name:
+                    friendly_error = f"❌ 节点错误：节点「{node_name}」不存在于服务器【{server.name}】\n\n💡 请检查ComfyUI是否安装了相应的自定义节点。"
+                else:
+                    friendly_error = f"❌ 节点错误：工作流中的某些节点不存在于服务器【{server.name}】\n\n💡 请检查ComfyUI是否安装了所需的自定义节点。"
+                self._task_results[task_id] = {'error': friendly_error}
+            # 检查是否是无效提示词错误
+            elif "invalid_prompt" in error_msg.lower() or "prompt" in error_msg.lower() and "validation" in error_msg.lower():
+                friendly_error = f"❌ 提示词错误：输入的提示词格式不正确或包含无效内容\n\n🖥️ 服务器：{server.name}\n\n💡 请检查提示词格式，避免使用特殊字符或过长的文本。"
+                self._task_results[task_id] = {'error': friendly_error}
+            else:
+                # 其他错误，保持原样但提供更多上下文
+                friendly_error = f"❌ 任务失败：{error_msg}\n\n🖥️ 服务器：{server.name}\n\n💡 如果问题持续存在，请检查参数设置或联系管理员。"
+                self._task_results[task_id] = {'error': friendly_error}
+            
+            # 确保任务结果被存储
+            if not hasattr(self, '_task_results'):
+                self._task_results = {}
+            if task_id not in self._task_results:
+                self._task_results[task_id] = {'error': f'任务处理失败：{error_msg}'}
+
+    async def _process_web_api_txt2img(self, server: ServerState, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        """处理Web API文生图任务"""
+        prompt = task_data.get("prompt")
+        width = task_data.get("width")
+        height = task_data.get("height")
+        batch_size = task_data.get("batch_size")
+        seed = task_data.get("seed")
+        model = task_data.get("model")
+        lora_list = task_data.get("lora_list", [])
+        user_id = task_data.get("user_id")
+        
+        # 构建ComfyUI提示词
+        comfy_prompt = self._build_comfyui_prompt(
+            prompt, seed, width, height, None, 1, batch_size, lora_list, model
+        )
+        
+        # 发送到ComfyUI
+        prompt_id = await self._send_comfyui_prompt(server, comfy_prompt)
+        
+        # 轮询任务状态
+        history_data = await self._poll_task_status(server, prompt_id)
+        if not history_data or history_data.get("status", {}).get("completed") is False:
+            raise Exception("任务超时或未完成（超时10分钟）")
+        
+        # 提取图片信息
+        image_info_list = self._extract_batch_image_info(history_data)
+        if not image_info_list or len(image_info_list) == 0:
+            raise Exception("未从ComfyUI历史数据中找到图片")
+        
+        # 获取图片URL（使用代理模式）
+        image_urls = []
+        for image_info in image_info_list:
+            # 先保存图片，获取保存后的文件名
+            saved_filename = await self._save_image_locally(server, image_info["filename"], "aimg", user_id)
+            
+            # 如果启用了保存，使用保存后的文件名；否则使用原始文件名
+            filename_for_url = saved_filename if saved_filename else image_info["filename"]
+            image_url = await self._get_image_url(server, filename_for_url, use_proxy=True)
+            image_urls.append(image_url)
+            
+            # 记录图片生成（如果已经保存过就不重复记录）
+            if saved_filename:
+                await self._record_image_generation(saved_filename, user_id)
+            else:
+                await self._record_image_generation(image_info["filename"], user_id)
+        
+        return {
+            'success': True,
+            'task_id': task_data.get("task_id"),
+            'prompt': prompt,
+            'width': width,
+            'height': height,
+            'seed': seed,
+            'model': model,
+            'lora_count': len(lora_list),
+            'image_count': len(image_urls),
+            'images': image_urls
+        }
+
+    async def _process_web_api_img2img(self, server: ServerState, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        """处理Web API图生图任务"""
+        prompt = task_data.get("prompt")
+        image_base64 = task_data.get("image")
+        denoise = task_data.get("denoise")
+        batch_size = task_data.get("batch_size")
+        seed = task_data.get("seed")
+        model = task_data.get("model")
+        lora_list = task_data.get("lora_list", [])
+        user_id = task_data.get("user_id")
+        
+        # 直接上传图片到ComfyUI服务器
+        image_data = base64.b64decode(image_base64)
+        
+        # 使用内存中的数据上传到ComfyUI
+        form_data = aiohttp.FormData()
+        form_data.add_field("image", image_data, filename="upload.png", content_type="image/png")
+        
+        upload_url = f"{server.url}/upload/image"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(upload_url, data=form_data) as resp:
+                if resp.status != 200:
+                    resp_text = await resp.text()
+                    filtered_resp = self._filter_server_urls(resp_text[:50])
+                    raise Exception(f"图片上传失败（HTTP {resp.status}）：{filtered_resp}")
+                resp_data = await resp.json()
+                image_filename = resp_data.get("name", "")
+                if not image_filename:
+                    raise Exception("图片上传成功但未返回文件名")
+        
+        try:
+            # 构建ComfyUI提示词
+            comfy_prompt = self._build_comfyui_prompt(
+                prompt, seed, 512, 512, image_filename, denoise, batch_size, lora_list, model
+            )
+            
+            # 发送到ComfyUI
+            prompt_id = await self._send_comfyui_prompt(server, comfy_prompt)
+            
+            # 轮询任务状态
+            history_data = await self._poll_task_status(server, prompt_id)
+            if not history_data or history_data.get("status", {}).get("completed") is False:
+                raise Exception("任务超时或未完成（超时10分钟）")
+            
+            # 提取图片信息
+            image_info_list = self._extract_batch_image_info(history_data)
+            if not image_info_list or len(image_info_list) == 0:
+                raise Exception("未从ComfyUI历史数据中找到图片")
+            
+            # 获取图片URL（使用代理模式）
+            image_urls = []
+            for image_info in image_info_list:
+                # 先保存图片，获取保存后的文件名
+                saved_filename = await self._save_image_locally(server, image_info["filename"], "img2img", user_id)
+                
+                # 如果启用了保存，使用保存后的文件名；否则使用原始文件名
+                filename_for_url = saved_filename if saved_filename else image_info["filename"]
+                image_url = await self._get_image_url(server, filename_for_url, use_proxy=True)
+                image_urls.append(image_url)
+                
+                # 记录图片生成（如果已经保存过就不重复记录）
+                if saved_filename:
+                    await self._record_image_generation(saved_filename, user_id)
+                else:
+                    await self._record_image_generation(image_info["filename"], user_id)
+            
+            return {
+                'success': True,
+                'task_id': task_data.get("task_id"),
+                'prompt': prompt,
+                'denoise': denoise,
+                'seed': seed,
+                'model': model,
+                'lora_count': len(lora_list),
+                'image_count': len(image_urls),
+                'images': image_urls
+            }
+            
+        finally:
+            # 清理临时文件
+            try:
+                os.unlink(image_filename)
+            except:
+                pass
+
+    async def _process_web_api_workflow(self, server: ServerState, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        """处理Web API Workflow任务"""
+        workflow_name = task_data.get("workflow_name")
+        params = task_data.get("params")
+        image_base64 = task_data.get("image")
+        user_id = task_data.get("user_id")
+        
+        workflow_info = self.workflows[workflow_name]
+        config = workflow_info["config"]
+        workflow_data = workflow_info["workflow"]
+        
+        # 构建最终workflow
+        final_workflow = copy.deepcopy(workflow_data)
+        
+        # 注入主配置
+        self._inject_main_config(final_workflow, workflow_name)
+        
+        # 注入用户参数
+        self._inject_user_params(final_workflow, config, params)
+        
+        # 处理图片输入（如果有）
+        if image_base64:
+            # 直接上传图片到ComfyUI服务器，而不是创建本地临时文件
+            image_data = base64.b64decode(image_base64)
+            
+            # 使用内存中的数据上传到ComfyUI
+            form_data = aiohttp.FormData()
+            form_data.add_field("image", image_data, filename="upload.png", content_type="image/png")
+            
+            upload_url = f"{server.url}/upload/image"
+            async with aiohttp.ClientSession() as session:
+                async with session.post(upload_url, data=form_data) as resp:
+                    if resp.status != 200:
+                        resp_text = await resp.text()
+                        filtered_resp = self._filter_server_urls(resp_text[:50])
+                        raise Exception(f"图片上传失败（HTTP {resp.status}）：{filtered_resp}")
+                    resp_data = await resp.json()
+                    image_filename = resp_data.get("name", "")
+                    if not image_filename:
+                        raise Exception("图片上传成功但未返回文件名")
+            
+            # 将图片注入到workflow中
+            self._inject_image_to_workflow(final_workflow, config, image_filename)
+        
+        # 发送到ComfyUI
+        prompt_id = await self._send_comfyui_prompt(server, final_workflow)
+        
+        # 轮询任务状态
+        history_data = await self._poll_task_status(server, prompt_id)
+        if not history_data or history_data.get("status", {}).get("completed") is False:
+            raise Exception("任务超时或未完成（超时10分钟）")
+        
+        # 提取输出图片
+        output_nodes = config.get("output_nodes", [])
+        output_mappings = config.get("output_mappings", {})
+        image_urls = []
+        
+        for node_id in output_nodes:
+            if node_id in output_mappings:
+                outputs = history_data.get("outputs", {})
+                node_output = outputs.get(node_id)
+                if node_output and node_output.get("images"):
+                    for image_info in node_output["images"]:
+                        # 先保存图片，获取保存后的文件名
+                        saved_filename = await self._save_image_locally(server, image_info["filename"], f"workflow_{workflow_name}", user_id)
+                        
+                        # 如果启用了保存，使用保存后的文件名；否则使用原始文件名
+                        filename_for_url = saved_filename if saved_filename else image_info["filename"]
+                        image_url = await self._get_image_url(server, filename_for_url, use_proxy=True)
+                        image_urls.append(image_url)
+                        
+                        # 记录图片生成（如果已经保存过就不重复记录）
+                        if saved_filename:
+                            await self._record_image_generation(saved_filename, user_id)
+                        else:
+                            await self._record_image_generation(image_info["filename"], user_id)
+        
+        return {
+            'success': True,
+            'task_id': task_data.get("task_id"),
+            'workflow_name': workflow_name,
+            'params': params,
+            'image_count': len(image_urls),
+            'images': image_urls
+        }
 
     def _truncate_prompt(self, prompt: str) -> str:
         max_display_len = 8
@@ -2073,15 +2521,32 @@ class ModComfyUI(Star):
             raise Exception("未找到SaveImage节点的输出图片")
         return save_node_data["images"]
 
-    async def _get_image_url(self, server: ServerState, filename: str) -> str:
-        url_params = {"filename": filename, "type": "output", "subfolder": "", "preview": "true"}
-        query_str = "&".join([f"{k}={quote(v)}" for k, v in url_params.items()])
-        return f"{server.url}/view?{query_str}"
+    async def _get_image_url(self, server: ServerState, filename: str, use_proxy: bool = False) -> str:
+        """获取图片URL
+        
+        Args:
+            server: ComfyUI服务器状态
+            filename: 图片文件名
+            use_proxy: 是否使用代理模式（用于Web API）
+        """
+        if use_proxy and self.enable_web_api and self.web_api_image_proxy:
+            # Web API模式：返回相对路径，让浏览器自动适配当前域名
+            # 这样可以避免暴露127.0.0.1地址，外部用户可以通过Web服务器访问图片
+            return f"/api/image/{filename}"
+        else:
+            # 默认模式：直接返回ComfyUI地址（用于内部机器人消息）
+            url_params = {"filename": filename, "type": "output", "subfolder": "", "preview": "true"}
+            query_str = "&".join([f"{k}={quote(v)}" for k, v in url_params.items()])
+            return f"{server.url}/view?{query_str}"
 
-    async def _save_image_locally(self, server: ServerState, filename: str, prompt: str = "", user_id: str = "") -> None:
-        """静悄悄保存图片到本地"""
+    async def _save_image_locally(self, server: ServerState, filename: str, prompt: str = "", user_id: str = "") -> Optional[str]:
+        """静悄悄保存图片到本地
+        
+        Returns:
+            保存后的文件名（包含时间戳前缀），如果未启用保存则返回None
+        """
         if not self.enable_auto_save:
-            return
+            return None
             
         try:
             # 获取图片URL
@@ -2092,7 +2557,7 @@ class ModComfyUI(Star):
                 async with session.get(image_url, timeout=30) as resp:
                     if resp.status != 200:
                         logger.warning(f"下载图片失败，HTTP状态码: {resp.status}")
-                        return
+                        return None
                     image_data = await resp.read()
             
             # 创建保存目录
@@ -2126,6 +2591,8 @@ class ModComfyUI(Star):
             # 记录图片生成信息
             if user_id:
                 asyncio.create_task(self._record_image_generation(saved_filename, user_id))
+            
+            return saved_filename
             
         except Exception as e:
             logger.error(f"自动保存图片失败: {str(e)}")
@@ -3341,6 +3808,9 @@ class ModComfyUI(Star):
             # 停止帮助服务器
             await self._stop_help_server()
             
+            # 停止Web API服务器
+            self._stop_web_api_server()
+            
             # 清理临时文件
             await self.cleanup_temp_files()
             
@@ -4119,6 +4589,84 @@ class ModComfyUI(Star):
         
         return final_workflow
 
+    def _inject_image_to_workflow(self, workflow: Dict[str, Any], config: Dict[str, Any], image_path: str) -> None:
+        """将图片注入到workflow中"""
+        try:
+            # 查找图片输入节点
+            input_nodes = config.get("input_nodes", [])
+            for node_id in input_nodes:
+                if node_id in workflow:
+                    node_config = workflow[node_id]
+                    class_type = node_config.get("class_type", "")
+                    
+                    # 常见的图片输入节点类型
+                    if class_type in ["LoadImage", "ImageLoader", "ImageInput"]:
+                        if "inputs" in node_config:
+                            node_config["inputs"]["image"] = image_path
+                        break
+            else:
+                # 如果没有找到明确的图片输入节点，尝试查找包含image参数的节点
+                for node_id, node_data in workflow.items():
+                    if "inputs" in node_data and "image" in node_data["inputs"]:
+                        node_data["inputs"]["image"] = image_path
+                        break
+        except Exception as e:
+            logger.warning(f"注入图片到workflow失败: {e}")
+
+    def _inject_user_params(self, workflow: Dict[str, Any], config: Dict[str, Any], params: Dict[str, Any]) -> None:
+        """将用户参数注入到workflow中"""
+        try:
+            node_configs = config.get("node_configs", {})
+            
+            for node_id, param_configs in node_configs.items():
+                if node_id not in workflow:
+                    continue
+                
+                for param_name, param_value in params.items():
+                    # 检查参数是否在当前节点的配置中
+                    if param_name in param_configs:
+                        param_config = param_configs[param_name]
+                        
+                        # 类型转换
+                        converted_value = self._convert_param_value(param_value, param_config)
+                        
+                        # 注入参数
+                        if "inputs" not in workflow[node_id]:
+                            workflow[node_id]["inputs"] = {}
+                        workflow[node_id]["inputs"][param_name] = converted_value
+                        
+                        logger.debug(f"注入参数: {node_id}.{param_name} = {converted_value}")
+        except Exception as e:
+            logger.warning(f"注入用户参数到workflow失败: {e}")
+
+    def _convert_param_value(self, value: Any, param_config: Dict[str, Any]) -> Any:
+        """转换参数值到正确的类型"""
+        try:
+            param_type = param_config.get("type", "string")
+            
+            if param_type == "number":
+                if "." in str(value):
+                    return float(value)
+                else:
+                    return int(value)
+            elif param_type == "boolean":
+                if isinstance(value, str):
+                    return value.lower() in ["true", "1", "yes", "on"]
+                return bool(value)
+            elif param_type == "select":
+                options = param_config.get("options", [])
+                if value not in options:
+                    default = param_config.get("default", options[0] if options else "")
+                    if default in options:
+                        return default
+                return value
+            else:
+                # 默认为字符串
+                return str(value)
+        except Exception as e:
+            logger.warning(f"参数值转换失败: {value} -> {e}")
+            return value
+
     def _init_gui(self) -> None:
         """初始化Flask GUI应用"""
         try:
@@ -4128,8 +4676,8 @@ class ModComfyUI(Star):
             self.app.secret_key = os.environ.get('FLASK_SECRET_KEY') or os.urandom(24)
             
             # 配置日志
-            gui_logger = logging.getLogger('flask_app')
-            gui_logger.setLevel(logging.INFO)
+            # 使用 astrabot.api.logger 记录 Flask 应用启动
+            logger.info("Flask GUI 应用启动")
             
             # 设置模板目录
             template_dir = self.config_dir / "templates"
@@ -4500,6 +5048,1242 @@ class ModComfyUI(Star):
             self.gui_running = False
             logger.info("GUI服务器已停止")
 
+    def _init_web_api(self) -> None:
+        """初始化Web API Flask应用"""
+        try:
+            # 创建Flask应用
+            self.web_api_app = Flask(__name__)
+            # 使用动态生成密钥
+            self.web_api_app.secret_key = os.environ.get('FLASK_SECRET_KEY') or os.urandom(24)
+            
+            # 配置日志
+            # 使用 astrabot.api.logger 记录 Web API 应用启动
+            logger.info("Flask Web API 应用启动")
+            
+            # 注册Web API路由
+            self._register_web_api_routes()
+            
+            logger.info(f"Web API应用初始化成功，端口: {self.web_api_port}")
+            
+        except Exception as e:
+            logger.error(f"初始化Web API失败: {e}")
+            self.enable_web_api = False
+
+    def _register_web_api_routes(self) -> None:
+        """注册Web API路由"""
+        
+        def api_auth_required(f):
+            """API认证装饰器"""
+            @wraps(f)
+            def decorated_function(*args, **kwargs):
+                auth_header = request.headers.get('Authorization')
+                if not auth_header or not auth_header.startswith('Bearer '):
+                    return jsonify({'error': '缺少认证令牌'}), 401
+                
+                token = auth_header[7:]  # 移除 'Bearer ' 前缀
+                
+                # 验证token（这里使用简单的用户名密码验证）
+                if not self._validate_api_token(token, request):
+                    return jsonify({'error': '无效的认证令牌'}), 401
+                
+                return f(*args, **kwargs)
+            return decorated_function
+
+        # 前端页面路由
+        @self.web_api_app.route('/')
+        def index():
+            """主页"""
+            try:
+                # 检查templates目录是否存在web_index.html
+                template_path = os.path.join(os.path.dirname(__file__), 'templates', 'web_index.html')
+                if os.path.exists(template_path):
+                    return render_template('web_index.html')
+                else:
+                    # 如果模板不存在，返回简单的HTML
+                    return '''
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>ComfyUI Web API</title>
+                        <meta charset="utf-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1">
+                        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+                        <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+                    </head>
+                    <body>
+                        <div class="container mt-5">
+                            <div class="row justify-content-center">
+                                <div class="col-md-8">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <h3><i class="bi bi-palette-fill"></i> ComfyUI Web API</h3>
+                                        </div>
+                                        <div class="card-body">
+                                            <p>欢迎使用 ComfyUI Web API 服务！</p>
+                                            <h5>API 端点：</h5>
+                                            <ul>
+                                                <li><strong>POST /api/register</strong> - 用户注册</li>
+                                                <li><strong>POST /api/login</strong> - 用户登录</li>
+                                                <li><strong>POST /api/aimg</strong> - 文生图</li>
+                                                <li><strong>POST /api/img2img</strong> - 图生图</li>
+                                                <li><strong>POST /api/workflow/&lt;name&gt;</strong> - 执行工作流</li>
+                                                <li><strong>GET /api/status</strong> - 获取状态</li>
+                                            </ul>
+                                            <p><strong>注意：</strong> 所有API请求都需要在Header中包含认证token：<br>
+                                            <code>Authorization: Bearer &lt;your_token&gt;</code></p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </body>
+                    </html>
+                    '''
+            except Exception as e:
+                logger.error(f"渲染主页失败: {e}")
+                return f"<h1>ComfyUI Web API</h1><p>服务运行中，但模板渲染失败: {str(e)}</p>"
+
+        @self.web_api_app.route('/static/<path:filename>')
+        def static_files(filename):
+            """静态文件服务"""
+            try:
+                # 检查static目录是否存在
+                static_dir = os.path.join(os.path.dirname(__file__), 'static')
+                if os.path.exists(static_dir):
+                    return send_from_directory(static_dir, filename)
+                else:
+                    return "Static files not found", 404
+            except Exception as e:
+                logger.error(f"提供静态文件失败: {e}")
+                return f"Static file error: {str(e)}", 500
+
+        @self.web_api_app.route('/api/register', methods=['POST'])
+        def register():
+            """用户注册"""
+            if not self.web_api_allow_register:
+                return jsonify({'error': '注册功能已禁用'}), 403
+            
+            try:
+                data = request.get_json()
+                if not data:
+                    return jsonify({'error': '请求数据为空'}), 400
+                
+                username = data.get('username', '').strip()
+                password = data.get('password', '').strip()
+                
+                if not username or not password:
+                    return jsonify({'error': '用户名和密码不能为空'}), 400
+                
+                # 检查用户名是否已存在
+                if self._user_exists(username):
+                    return jsonify({'error': '用户名已存在'}), 409
+                
+                # 创建用户
+                user_id = self._create_user(username, password)
+                if user_id:
+                    # 生成API token
+                    token = self._generate_api_token(username)
+                    return jsonify({
+                        'message': '注册成功',
+                        'user_id': user_id,
+                        'username': username,
+                        'token': token
+                    }), 201
+                else:
+                    return jsonify({'error': '注册失败'}), 500
+                    
+            except Exception as e:
+                logger.error(f"用户注册失败: {e}")
+                return jsonify({'error': '服务器内部错误'}), 500
+
+        @self.web_api_app.route('/api/login', methods=['POST'])
+        def login():
+            """用户登录"""
+            try:
+                data = request.get_json()
+                if not data:
+                    return jsonify({'error': '请求数据为空'}), 400
+                
+                username = data.get('username', '').strip()
+                password = data.get('password', '').strip()
+                
+                if not username or not password:
+                    return jsonify({'error': '用户名和密码不能为空'}), 400
+                
+                # 验证用户
+                if self._verify_user(username, password):
+                    # 生成API token
+                    token = self._generate_api_token(username)
+                    return jsonify({
+                        'message': '登录成功',
+                        'username': username,
+                        'token': token
+                    }), 200
+                else:
+                    return jsonify({'error': '用户名或密码错误'}), 401
+                    
+            except Exception as e:
+                logger.error(f"用户登录失败: {e}")
+                return jsonify({'error': '服务器内部错误'}), 500
+
+        @self.web_api_app.route('/api/aimg', methods=['POST'])
+        @api_auth_required
+        def api_aimg():
+            """文生图API"""
+            try:
+                data = request.get_json()
+                if not data:
+                    return jsonify({'error': '请求数据为空'}), 400
+                
+                prompt = data.get('prompt', '').strip()
+                if not prompt:
+                    return jsonify({'error': '提示词不能为空'}), 400
+                
+                # 解析其他参数
+                width = data.get('width', self.default_width)
+                height = data.get('height', self.default_height)
+                batch_size = data.get('batch_size', self.txt2img_batch_size)
+                model = data.get('model', None)
+                lora = data.get('lora', [])
+                seed = data.get('seed', self.seed)
+                
+                # 创建模拟事件对象
+                user_id = request.environ.get('API_USER_ID', 'web_api_user')
+                
+                # 异步处理图片生成
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                try:
+                    result = loop.run_until_complete(
+                        self._process_aimg_request(prompt, width, height, batch_size, model, lora, seed, user_id)
+                    )
+                    return jsonify(result), 200
+                finally:
+                    loop.close()
+                    
+            except Exception as e:
+                logger.error(f"文生图API处理失败: {e}")
+                return jsonify({'error': str(e)}), 500
+
+        @self.web_api_app.route('/api/img2img', methods=['POST'])
+        @api_auth_required
+        def api_img2img():
+            """图生图API"""
+            try:
+                # 检查是否有文件上传
+                if 'image' not in request.files:
+                    return jsonify({'error': '请上传图片'}), 400
+                
+                file = request.files['image']
+                if file.filename == '':
+                    return jsonify({'error': '未选择文件'}), 400
+                
+                data = request.form.to_dict()
+                prompt = data.get('prompt', '').strip()
+                if not prompt:
+                    return jsonify({'error': '提示词不能为空'}), 400
+                
+                # 解析其他参数
+                denoise = float(data.get('denoise', self.default_denoise))
+                batch_size = int(data.get('batch_size', self.img2img_batch_size))
+                model = data.get('model', None)
+                lora = data.get('lora', '[]')
+                # 解析LoRA JSON字符串
+                try:
+                    if isinstance(lora, str):
+                        lora = json.loads(lora)
+                    elif not isinstance(lora, list):
+                        lora = []
+                except json.JSONDecodeError:
+                    logger.error(f"图生图API LoRA参数JSON解析失败: {lora}")
+                    lora = []
+                seed = data.get('seed', self.seed)
+                
+                # 创建模拟事件对象
+                user_id = request.environ.get('API_USER_ID', 'web_api_user')
+                
+                # 异步处理图片生成
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                try:
+                    # 保存上传的图片到临时文件
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+                        file.save(temp_file.name)
+                        temp_image_path = temp_file.name
+                    
+                    result = loop.run_until_complete(
+                        self._process_img2img_request(prompt, temp_image_path, denoise, batch_size, model, lora, seed, user_id)
+                    )
+                    return jsonify(result), 200
+                finally:
+                    loop.close()
+                    # 清理临时文件
+                    try:
+                        os.unlink(temp_image_path)
+                    except:
+                        pass
+                    
+            except Exception as e:
+                logger.error(f"图生图API处理失败: {e}")
+                return jsonify({'error': str(e)}), 500
+
+        @self.web_api_app.route('/api/workflow/<workflow_name>', methods=['POST'])
+        @api_auth_required
+        def api_workflow(workflow_name):
+            """Workflow API"""
+            try:
+                if workflow_name not in self.workflows:
+                    return jsonify({'error': f'未找到workflow: {workflow_name}'}), 404
+                
+                # 检查是否有文件上传
+                file = None
+                temp_image_path = None
+                if 'image' in request.files:
+                    file = request.files['image']
+                    if file.filename != '':
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+                            file.save(temp_file.name)
+                            temp_image_path = temp_file.name
+                
+                data = request.form.to_dict() if file else request.get_json()
+                if not data:
+                    data = {}
+                
+                # 创建模拟事件对象
+                user_id = request.environ.get('API_USER_ID', 'web_api_user')
+                
+                # 异步处理workflow
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                try:
+                    result = loop.run_until_complete(
+                        self._process_workflow_request(workflow_name, data, temp_image_path, user_id)
+                    )
+                    return jsonify(result), 200
+                finally:
+                    loop.close()
+                    # 清理临时文件
+                    if temp_image_path:
+                        try:
+                            os.unlink(temp_image_path)
+                        except:
+                            pass
+                    
+            except Exception as e:
+                logger.error(f"Workflow API处理失败: {e}")
+                return jsonify({'error': str(e)}), 500
+
+        @self.web_api_app.route('/api/image/<filename>')
+        def serve_image(filename):
+            """提供图片代理服务
+            
+            优先级：
+            1. 如果启用自动保存，从本地保存的文件提供（支持时间戳前缀和日期目录）
+            2. 否则从ComfyUI服务器实时获取并代理
+            """
+            try:
+                # 安全检查：防止路径遍历攻击
+                if '..' in filename:
+                    return jsonify({'error': '非法文件名'}), 400
+                
+                # 如果启用了自动保存，优先从本地保存的文件提供
+                if self.enable_auto_save:
+                    # 检查是否是带时间戳前缀的文件名
+                    if filename.startswith(('2020', '2021', '2022', '2023', '2024', '2025')) and '_' in filename:
+                        # 格式：20251128_100636_comfyui_gen_00367_.png
+                        try:
+                            # 解析时间戳获取日期目录
+                            date_part = filename[:8]  # 20251128
+                            year = date_part[:4]
+                            month = int(date_part[4:6])  # 转换为整数
+                            day = int(date_part[6:8])    # 转换为整数
+                            
+                            # 构建完整路径 - 与保存逻辑保持一致
+                            auto_save_path = Path(self.auto_save_dir)
+                            if auto_save_path.is_absolute():
+                                # 绝对路径：直接使用
+                                image_path = auto_save_path / year / f"{month:02d}" / f"{day:02d}" / filename
+                            else:
+                                # 相对路径：基于插件目录
+                                plugin_dir = Path(os.path.dirname(__file__))
+                                image_path = plugin_dir / self.auto_save_dir / year / f"{month:02d}" / f"{day:02d}" / filename
+                            
+                            logger.info(f"查找图片路径: {image_path}")
+                            if os.path.exists(image_path) and os.path.isfile(image_path):
+                                logger.info(f"从本地提供图片（带时间戳）: {filename}")
+                                return send_file(str(image_path))
+                        except Exception as e:
+                            logger.warning(f"解析时间戳文件名失败: {e}")
+                    
+                    # 尝试直接在保存目录中查找（兼容非时间戳文件）
+                    auto_save_path = Path(self.auto_save_dir)
+                    if auto_save_path.is_absolute():
+                        local_image_path = auto_save_path / filename
+                    else:
+                        plugin_dir = Path(os.path.dirname(__file__))
+                        local_image_path = plugin_dir / self.auto_save_dir / filename
+                    
+                    if os.path.exists(local_image_path) and os.path.isfile(local_image_path):
+                        logger.info(f"从本地提供图片: {filename}")
+                        return send_file(str(local_image_path))
+                
+                # 如果本地没有，从ComfyUI服务器获取并代理
+                # 对于带时间戳的文件名，需要提取原始文件名
+                original_filename = filename
+                if '_' in filename and any(filename.startswith(prefix) for prefix in ['2020', '2021', '2022', '2023', '2024', '2025']):
+                    # 提取原始文件名（去掉时间戳前缀）
+                    parts = filename.split('_', 2)  # 分割为最多3部分
+                    if len(parts) >= 3:
+                        original_filename = parts[2]  # 取第三部分及之后的内容
+                
+                # 尝试从健康的服务器获取图片
+                for server in self.comfyui_servers:
+                    if server.healthy:
+                        try:
+                            image_url = f"{server.url}/view?filename={original_filename}&type=output&subfolder=&preview=true"
+                            logger.info(f"从服务器 {server.name} 代理图片: {original_filename}")
+                            
+                            # 下载图片，设置超时
+                            response = requests.get(image_url, timeout=15, stream=True)
+                            if response.status_code == 200:
+                                # 使用流式传输，避免大文件占用内存
+                                img_data = BytesIO(response.content)
+                                img_data.seek(0)
+                                
+                                # 根据文件扩展名确定MIME类型
+                                if filename.lower().endswith('.png'):
+                                    mimetype = 'image/png'
+                                elif filename.lower().endswith('.jpg') or filename.lower().endswith('.jpeg'):
+                                    mimetype = 'image/jpeg'
+                                elif filename.lower().endswith('.webp'):
+                                    mimetype = 'image/webp'
+                                else:
+                                    mimetype = 'image/png'
+                                
+                                # 设置缓存头
+                                response_headers = {
+                                    'Cache-Control': 'public, max-age=3600',  # 缓存1小时
+                                    'Access-Control-Allow-Origin': '*'
+                                }
+                                
+                                from flask import Response
+                                return Response(img_data.read(), mimetype=mimetype, headers=response_headers)
+                            else:
+                                logger.warning(f"服务器 {server.name} 返回状态码: {response.status_code}")
+                        except requests.exceptions.Timeout:
+                            logger.warning(f"从服务器 {server.name} 获取图片超时")
+                            continue
+                        except Exception as e:
+                            logger.warning(f"从服务器 {server.name} 获取图片失败: {e}")
+                            continue
+                
+                # 添加详细的调试信息
+                logger.error(f"无法获取图片: {filename}")
+                logger.error(f"自动保存启用: {self.enable_auto_save}")
+                logger.error(f"自动保存目录: {self.auto_save_dir}")
+                logger.error(f"保存目录类型: {'绝对路径' if Path(self.auto_save_dir).is_absolute() else '相对路径'}")
+                if self.enable_auto_save:
+                    auto_save_path = Path(self.auto_save_dir)
+                    if auto_save_path.is_absolute():
+                        base_path = auto_save_path
+                    else:
+                        plugin_dir = Path(os.path.dirname(__file__))
+                        base_path = plugin_dir / self.auto_save_dir
+                    logger.error(f"实际保存根目录: {base_path}")
+                    logger.error(f"目录是否存在: {os.path.exists(base_path)}")
+                
+                return jsonify({'error': '图片不存在或所有服务器不可用'}), 404
+                
+            except Exception as e:
+                logger.error(f"图片代理服务失败: {e}")
+                return jsonify({'error': '服务器内部错误'}), 500
+
+        @self.web_api_app.route('/api/status', methods=['GET'])
+        @api_auth_required
+        def api_status():
+            """获取API状态"""
+            try:
+                return jsonify({
+                    'status': 'running',
+                    'servers': [
+                        {
+                            'name': server.name,
+                            'url': server.url,
+                            'healthy': server.healthy,
+                            'busy': server.busy
+                        } for server in self.comfyui_servers
+                    ],
+                    'workflows': list(self.workflows.keys()),
+                    'models': self._get_unique_model_descriptions(),
+                    'loras': self._get_unique_lora_descriptions(),
+                    'samplers': self.available_samplers,
+                    'schedulers': self.available_schedulers,
+                }), 200
+            except Exception as e:
+                logger.error(f"状态API处理失败: {e}")
+                return jsonify({'error': str(e)}), 500
+
+    def _start_web_api_server(self) -> None:
+        """启动Web API服务器"""
+        if not self.enable_web_api or not self.web_api_app:
+            return
+            
+        def run_web_api():
+            try:
+                logger.info(f"启动ComfyUI Web API服务器...")
+                logger.info(f"访问地址: http://0.0.0.0:{self.web_api_port}")
+                logger.info(f"允许注册: {self.web_api_allow_register}")
+                logger.info("=" * 50)
+                
+                # 尝试使用不同的WSGI服务器
+                try:
+                    from gunicorn.app.base import BaseApplication
+                    
+                    class GunicornApp(BaseApplication):
+                        def __init__(self, app, options=None):
+                            self.options = options or {}
+                            self.application = app
+                            super().__init__()
+                        
+                        def load_config(self):
+                            config = {
+                                'bind': f'0.0.0.0:{self.web_api_port}',
+                                'workers': 1,
+                                'threads': 4,
+                                'timeout': 120,
+                                'keepalive': 2,
+                                'max_requests': 1000,
+                                'max_requests_jitter': 100,
+                                'preload_app': True,
+                            }
+                            for key, value in config.items():
+                                if key in self.cfg.settings:
+                                    self.cfg.set(key, value)
+                        
+                        def load(self):
+                            return self.application
+                    
+                    logger.info("使用 Gunicorn WSGI 服务器")
+                    GunicornApp(self.web_api_app, options={
+                        'bind': f'0.0.0.0:{self.web_api_port}',
+                    }).run()
+                    
+                except ImportError:
+                    logger.info("Gunicorn 不可用，尝试使用 Waitress...")
+                    try:
+                        from waitress import serve
+                        logger.info("使用 Waitress WSGI 服务器")
+                        serve(self.web_api_app, host='0.0.0.0', port=self.web_api_port, threads=4)
+                    except ImportError:
+                        logger.info("未安装 Waitress，使用 Flask 开发服务器")
+                        self.web_api_app.run(host='0.0.0.0', port=self.web_api_port, debug=False, threaded=True)
+                        
+            except Exception as e:
+                logger.error(f"Web API服务器启动失败: {e}")
+        
+        # 在新线程中启动Web API服务器
+        self.web_api_thread = threading.Thread(target=run_web_api, daemon=True)
+        self.web_api_thread.start()
+        self.web_api_running = True
+        logger.info("Web API服务器已启动")
+
+    def _stop_web_api_server(self) -> None:
+        """停止Web API服务器"""
+        if self.web_api_running and self.web_api_thread:
+            logger.info("正在停止Web API服务器...")
+            # 注意：由于在独立线程中运行，这里只是标记
+            self.web_api_running = False
+            logger.info("Web API服务器已停止")
+
+    def _user_exists(self, username: str) -> bool:
+        """检查用户是否存在"""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(self._check_user_exists(username))
+                return result
+            finally:
+                loop.close()
+        except Exception as e:
+            logger.error(f"检查用户存在性失败: {e}")
+            return False
+
+    async def _check_user_exists(self, username: str) -> bool:
+        """异步检查用户是否存在"""
+        try:
+            async with aiosqlite.connect(self.db_path) as conn:
+                cursor = await conn.execute(
+                    "SELECT COUNT(*) FROM api_users WHERE username = ?",
+                    (username,)
+                )
+                count = (await cursor.fetchone())[0]
+                return count > 0
+        except Exception as e:
+            logger.error(f"查询用户失败: {e}")
+            return False
+
+    def _create_user(self, username: str, password: str) -> Optional[str]:
+        """创建新用户"""
+        try:
+            import hashlib
+            # 简单的密码哈希
+            password_hash = hashlib.sha256(password.encode()).hexdigest()
+            
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                user_id = loop.run_until_complete(self._insert_user(username, password_hash))
+                return user_id
+            finally:
+                loop.close()
+        except Exception as e:
+            logger.error(f"创建用户失败: {e}")
+            return None
+
+    async def _insert_user(self, username: str, password_hash: str) -> Optional[str]:
+        """异步插入用户"""
+        try:
+            import uuid
+            user_id = str(uuid.uuid4())
+            
+            async with aiosqlite.connect(self.db_path) as conn:
+                # 创建api_users表（如果不存在）
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS api_users (
+                        id TEXT PRIMARY KEY,
+                        username TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                
+                await conn.execute(
+                    "INSERT INTO api_users (id, username, password_hash) VALUES (?, ?, ?)",
+                    (user_id, username, password_hash)
+                )
+                await conn.commit()
+                return user_id
+        except Exception as e:
+            logger.error(f"插入用户失败: {e}")
+            return None
+
+    def _verify_user(self, username: str, password: str) -> bool:
+        """验证用户凭据"""
+        try:
+            import hashlib
+            password_hash = hashlib.sha256(password.encode()).hexdigest()
+            
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(self._check_user_credentials(username, password_hash))
+                return result
+            finally:
+                loop.close()
+        except Exception as e:
+            logger.error(f"验证用户失败: {e}")
+            return False
+
+    async def _check_user_credentials(self, username: str, password_hash: str) -> bool:
+        """异步检查用户凭据"""
+        try:
+            async with aiosqlite.connect(self.db_path) as conn:
+                cursor = await conn.execute(
+                    "SELECT COUNT(*) FROM api_users WHERE username = ? AND password_hash = ?",
+                    (username, password_hash)
+                )
+                count = (await cursor.fetchone())[0]
+                return count > 0
+        except Exception as e:
+            logger.error(f"检查用户凭据失败: {e}")
+            return False
+
+    def _generate_api_token(self, username: str) -> str:
+        """生成API token"""
+        try:
+            import hashlib
+            import time
+            # 简单的token生成（用户名+时间戳的哈希）
+            token_data = f"{username}:{int(time.time())}"
+            token = hashlib.sha256(token_data.encode()).hexdigest()
+            
+            # 存储token到数据库
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self._store_token(username, token))
+            finally:
+                loop.close()
+            
+            return token
+        except Exception as e:
+            logger.error(f"生成API token失败: {e}")
+            return ""
+
+    async def _store_token(self, username: str, token: str) -> None:
+        """存储API token"""
+        try:
+            async with aiosqlite.connect(self.db_path) as conn:
+                # 创建api_tokens表（如果不存在）
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS api_tokens (
+                        token TEXT PRIMARY KEY,
+                        username TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        expires_at TIMESTAMP
+                    )
+                ''')
+                
+                # 设置token过期时间为24小时
+                import datetime
+                expires_at = datetime.datetime.now() + datetime.timedelta(hours=24)
+                
+                await conn.execute(
+                    "INSERT OR REPLACE INTO api_tokens (token, username, expires_at) VALUES (?, ?, ?)",
+                    (token, username, expires_at)
+                )
+                await conn.commit()
+        except Exception as e:
+            logger.error(f"存储token失败: {e}")
+
+    def _validate_api_token(self, token: str, request_obj) -> bool:
+        """验证API token"""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(self._check_token_valid(token, request_obj))
+                return result
+            finally:
+                loop.close()
+        except Exception as e:
+            logger.error(f"验证API token失败: {e}")
+            return False
+
+    async def _check_token_valid(self, token: str, request_obj) -> bool:
+        """异步检查token有效性"""
+        try:
+            import datetime
+            async with aiosqlite.connect(self.db_path) as conn:
+                cursor = await conn.execute(
+                    "SELECT username FROM api_tokens WHERE token = ? AND (expires_at IS NULL OR expires_at > ?)",
+                    (token, datetime.datetime.now())
+                )
+                result = await cursor.fetchone()
+                if result:
+                    # 将用户名存储到请求环境中，供后续使用
+                    username = result[0]
+                    request_obj.environ['API_USER_ID'] = username
+                    return True
+                return False
+        except Exception as e:
+            logger.error(f"检查token有效性失败: {e}")
+            return False
+
+    async def _process_aimg_request(self, prompt: str, width: int, height: int, batch_size: int, 
+                                  model: Optional[str], lora: List[str], seed: str, user_id: str) -> Dict[str, Any]:
+        """处理文生图请求"""
+        try:
+            # 检查开放时间
+            if not self._is_in_open_time():
+                return {
+                    'error': f'当前未开放图片生成服务，开放时间：{self.open_time_ranges}'
+                }
+            
+            # 检查服务器状态
+            if not self._get_any_healthy_server():
+                return {
+                    'error': '所有ComfyUI服务器均不可用，请稍后再试'
+                }
+            
+            # 检查用户并发限制
+            if not await self._check_user_task_limit(user_id):
+                return {
+                    'error': f'您当前有过多任务在执行中（最大{self.max_concurrent_tasks_per_user}个），请稍后再试'
+                }
+            
+            # 验证参数
+            if not (self.min_width <= width <= self.max_width):
+                return {
+                    'error': f'宽度必须在{self.min_width}~{self.max_width}之间'
+                }
+            
+            if not (self.min_height <= height <= self.max_height):
+                return {
+                    'error': f'高度必须在{self.min_height}~{self.max_height}之间'
+                }
+            
+            if not (1 <= batch_size <= self.max_txt2img_batch):
+                return {
+                    'error': f'批量数必须在1~{self.max_txt2img_batch}之间'
+                }
+            
+            # 处理模型选择
+            selected_model = None
+            if model:
+                # 确保model是字符串类型
+                if not isinstance(model, str):
+                    model = str(model)
+                
+                # 处理网页端传入的"描述，文件名"格式
+                if '，' in model or ',' in model:
+                    # 如果包含逗号，尝试分割并使用描述部分
+                    parts = model.split('，' if '，' in model else ',', 1)
+                    model_to_match = parts[0].strip()
+                else:
+                    model_to_match = model.strip()
+                
+                model_lower = model_to_match.lower()
+                
+                # 添加调试日志
+                logger.info(f"Web API 接收到的模型参数: {model}")
+                logger.info(f"Web API 处理后的匹配参数: {model_to_match}")
+                logger.info(f"Web API 可用的模型映射: {list(self.model_name_map.keys())}")
+                
+                if model_lower in self.model_name_map:
+                    selected_model = self.model_name_map[model_lower][0]
+                    logger.info(f"Web API 成功匹配到模型: {selected_model}")
+                else:
+                    logger.error(f"Web API 未找到模型: {model} (处理后: {model_to_match}, 小写: {model_lower})")
+                    return {
+                        'error': f'未找到模型：{model}'
+                    }
+            
+            # 处理LoRA
+            lora_list = []
+            
+            # 验证lora参数
+            if not isinstance(lora, list):
+                logger.error(f"Web API LoRA参数类型错误: {type(lora)}, 期望list")
+                return {
+                    'error': 'LoRA参数格式错误，期望数组格式'
+                }
+            
+            # 过滤空的LoRA项
+            valid_lora_items = []
+            for lora_item in lora:
+                if lora_item is None:
+                    continue
+                if isinstance(lora_item, str) and not lora_item.strip():
+                    continue
+                if isinstance(lora_item, dict) and not lora_item.get('name', '').strip():
+                    continue
+                valid_lora_items.append(lora_item)
+            
+            logger.info(f"Web API 过滤后的有效LoRA项: {valid_lora_items}")
+            
+            for lora_item in valid_lora_items:
+                # 网页端传入的是字典格式：{'name': '描述，文件名', 'strength': 0.6}
+                if isinstance(lora_item, dict):
+                    lora_name = lora_item.get('name', '')
+                    lora_strength = lora_item.get('strength', 1.0)
+                else:
+                    # 兼容字符串格式
+                    lora_name = str(lora_item)
+                    lora_strength = 1.0
+                
+                # 确保lora_name是字符串类型
+                if not isinstance(lora_name, str):
+                    lora_name = str(lora_name)
+                
+                # 处理网页端传入的"描述，文件名"格式
+                if '，' in lora_name or ',' in lora_name:
+                    # 如果包含逗号，尝试分割并使用描述部分
+                    parts = lora_name.split('，' if '，' in lora_name else ',', 1)
+                    lora_to_match = parts[0].strip()
+                else:
+                    lora_to_match = lora_name.strip()
+                
+                lora_lower = lora_to_match.lower()
+                
+                # 添加调试日志
+                logger.info(f"Web API 接收到的LoRA参数: {lora_item}")
+                logger.info(f"Web API 处理后的LoRA匹配参数: {lora_to_match}")
+                logger.info(f"Web API 可用的LoRA映射: {list(self.lora_name_map.keys())}")
+                
+                if lora_lower in self.lora_name_map:
+                    lora_list.append({
+                        'name': lora_to_match,  # 添加name属性，用于显示
+                        'filename': self.lora_name_map[lora_lower][0],
+                        'strength_model': float(lora_strength),
+                        'strength_clip': float(lora_strength)
+                    })
+                    logger.info(f"Web API 成功匹配到LoRA: {self.lora_name_map[lora_lower][0]} (强度: {lora_strength})")
+                else:
+                    logger.error(f"Web API 未找到LoRA: {lora_item} (处理后: {lora_to_match}, 小写: {lora_lower})")
+                    return {
+                        'error': f'未找到LoRA：{lora_name}'
+                    }
+            
+            # 处理种子
+            # 确保seed是字符串类型
+            if not isinstance(seed, str):
+                seed = str(seed)
+            if seed == "随机" or seed.lower() == "random" or seed == "-1":
+                seed_value = random.randint(1, 18446744073709551615)
+            else:
+                try:
+                    seed_value = int(seed)
+                    # 确保种子值在有效范围内
+                    if seed_value < 0:
+                        seed_value = random.randint(1, 18446744073709551615)
+                except ValueError:
+                    return {
+                        'error': f'种子值无效：{seed}'
+                    }
+            
+            # 创建任务
+            task_id = str(uuid.uuid4())
+            task_data = {
+                'type': 'txt2img',
+                'prompt': prompt,
+                'width': width,
+                'height': height,
+                'batch_size': batch_size,
+                'seed': seed_value,
+                'model': selected_model,
+                'lora_list': lora_list,
+                'user_id': user_id,
+                'task_id': task_id,
+                'is_web_api': True
+            }
+            
+            # 提交任务到队列
+            try:
+                await self.task_queue.put(task_data)
+                logger.info(f"Web API文生图任务已提交: {task_id}")
+            except asyncio.QueueFull:
+                return {
+                    'error': '任务队列已满，请稍后再试'
+                }
+            
+            # 等待任务完成
+            result = await self._wait_for_task_completion(task_id, timeout=300)  # 5分钟超时
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"处理文生图请求失败: {e}")
+            return {
+                'error': f'处理请求失败: {str(e)}'
+            }
+
+    async def _process_img2img_request(self, prompt: str, image_path: str, denoise: float, 
+                                     batch_size: int, model: Optional[str], lora: List[str], 
+                                     seed: str, user_id: str) -> Dict[str, Any]:
+        """处理图生图请求"""
+        try:
+            # 检查开放时间
+            if not self._is_in_open_time():
+                return {
+                    'error': f'当前未开放图片生成服务，开放时间：{self.open_time_ranges}'
+                }
+            
+            # 检查服务器状态
+            if not self._get_any_healthy_server():
+                return {
+                    'error': '所有ComfyUI服务器均不可用，请稍后再试'
+                }
+            
+            # 检查用户并发限制
+            if not await self._check_user_task_limit(user_id):
+                return {
+                    'error': f'您当前有过多任务在执行中（最大{self.max_concurrent_tasks_per_user}个），请稍后再试'
+                }
+            
+            # 验证参数
+            if not (0.0 <= denoise <= 1.0):
+                return {
+                    'error': f'噪声系数必须在0.0~1.0之间'
+                }
+            
+            if not (1 <= batch_size <= self.max_img2img_batch):
+                return {
+                    'error': f'批量数必须在1~{self.max_img2img_batch}之间'
+                }
+            
+            # 处理模型选择
+            selected_model = None
+            if model:
+                # 确保model是字符串类型
+                if not isinstance(model, str):
+                    model = str(model)
+                
+                # 处理网页端传入的"描述，文件名"格式
+                if '，' in model or ',' in model:
+                    # 如果包含逗号，尝试分割并使用描述部分
+                    parts = model.split('，' if '，' in model else ',', 1)
+                    model_to_match = parts[0].strip()
+                else:
+                    model_to_match = model.strip()
+                
+                model_lower = model_to_match.lower()
+                
+                # 添加调试日志
+                logger.info(f"Web API 接收到的模型参数: {model}")
+                logger.info(f"Web API 处理后的匹配参数: {model_to_match}")
+                logger.info(f"Web API 可用的模型映射: {list(self.model_name_map.keys())}")
+                
+                if model_lower in self.model_name_map:
+                    selected_model = self.model_name_map[model_lower][0]
+                    logger.info(f"Web API 成功匹配到模型: {selected_model}")
+                else:
+                    logger.error(f"Web API 未找到模型: {model} (处理后: {model_to_match}, 小写: {model_lower})")
+                    return {
+                        'error': f'未找到模型：{model}'
+                    }
+            
+            # 处理LoRA
+            lora_list = []
+            
+            # 验证lora参数
+            if not isinstance(lora, list):
+                logger.error(f"Web API LoRA参数类型错误: {type(lora)}, 期望list")
+                return {
+                    'error': 'LoRA参数格式错误，期望数组格式'
+                }
+            
+            # 过滤空的LoRA项
+            valid_lora_items = []
+            for lora_item in lora:
+                if lora_item is None:
+                    continue
+                if isinstance(lora_item, str) and not lora_item.strip():
+                    continue
+                if isinstance(lora_item, dict) and not lora_item.get('name', '').strip():
+                    continue
+                valid_lora_items.append(lora_item)
+            
+            logger.info(f"Web API 过滤后的有效LoRA项: {valid_lora_items}")
+            
+            for lora_item in valid_lora_items:
+                # 网页端传入的是字典格式：{'name': '描述，文件名', 'strength': 0.6}
+                if isinstance(lora_item, dict):
+                    lora_name = lora_item.get('name', '')
+                    lora_strength = lora_item.get('strength', 1.0)
+                else:
+                    # 兼容字符串格式
+                    lora_name = str(lora_item)
+                    lora_strength = 1.0
+                
+                # 确保lora_name是字符串类型
+                if not isinstance(lora_name, str):
+                    lora_name = str(lora_name)
+                
+                # 处理网页端传入的"描述，文件名"格式
+                if '，' in lora_name or ',' in lora_name:
+                    # 如果包含逗号，尝试分割并使用描述部分
+                    parts = lora_name.split('，' if '，' in lora_name else ',', 1)
+                    lora_to_match = parts[0].strip()
+                else:
+                    lora_to_match = lora_name.strip()
+                
+                lora_lower = lora_to_match.lower()
+                
+                # 添加调试日志
+                logger.info(f"Web API 接收到的LoRA参数: {lora_item}")
+                logger.info(f"Web API 处理后的LoRA匹配参数: {lora_to_match}")
+                logger.info(f"Web API 可用的LoRA映射: {list(self.lora_name_map.keys())}")
+                
+                if lora_lower in self.lora_name_map:
+                    lora_list.append({
+                        'name': lora_to_match,  # 添加name属性，用于显示
+                        'filename': self.lora_name_map[lora_lower][0],
+                        'strength_model': float(lora_strength),
+                        'strength_clip': float(lora_strength)
+                    })
+                    logger.info(f"Web API 成功匹配到LoRA: {self.lora_name_map[lora_lower][0]} (强度: {lora_strength})")
+                else:
+                    logger.error(f"Web API 未找到LoRA: {lora_item} (处理后: {lora_to_match}, 小写: {lora_lower})")
+                    return {
+                        'error': f'未找到LoRA：{lora_name}'
+                    }
+            
+            # 处理种子
+            # 确保seed是字符串类型
+            if not isinstance(seed, str):
+                seed = str(seed)
+            if seed == "随机" or seed.lower() == "random" or seed == "-1":
+                seed_value = random.randint(1, 18446744073709551615)
+            else:
+                try:
+                    seed_value = int(seed)
+                    # 确保种子值在有效范围内
+                    if seed_value < 0:
+                        seed_value = random.randint(1, 18446744073709551615)
+                except ValueError:
+                    return {
+                        'error': f'种子值无效：{seed}'
+                    }
+            
+            # 读取图片
+            try:
+                with open(image_path, 'rb') as f:
+                    image_data = f.read()
+                    image_base64 = base64.b64encode(image_data).decode('utf-8')
+            except Exception as e:
+                return {
+                    'error': f'读取图片失败: {str(e)}'
+                }
+            
+            # 创建任务
+            task_id = str(uuid.uuid4())
+            task_data = {
+                'type': 'img2img',
+                'prompt': prompt,
+                'image': image_base64,
+                'denoise': denoise,
+                'batch_size': batch_size,
+                'seed': seed_value,
+                'model': selected_model,
+                'lora_list': lora_list,
+                'user_id': user_id,
+                'task_id': task_id,
+                'is_web_api': True
+            }
+            
+            # 提交任务到队列
+            try:
+                await self.task_queue.put(task_data)
+                logger.info(f"Web API图生图任务已提交: {task_id}")
+            except asyncio.QueueFull:
+                return {
+                    'error': '任务队列已满，请稍后再试'
+                }
+            
+            # 等待任务完成
+            result = await self._wait_for_task_completion(task_id, timeout=300)  # 5分钟超时
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"处理图生图请求失败: {e}")
+            return {
+                'error': f'处理请求失败: {str(e)}'
+            }
+
+    async def _process_workflow_request(self, workflow_name: str, params: Dict[str, Any], 
+                                       image_path: Optional[str], user_id: str) -> Dict[str, Any]:
+        """处理Workflow请求"""
+        try:
+            # 检查workflow是否存在
+            if workflow_name not in self.workflows:
+                return {
+                    'error': f'未找到workflow: {workflow_name}'
+                }
+            
+            workflow_info = self.workflows[workflow_name]
+            config = workflow_info["config"]
+            workflow_data = workflow_info["workflow"]
+            
+            # 检查开放时间
+            if not self._is_in_open_time():
+                return {
+                    'error': f'当前未开放图片生成服务，开放时间：{self.open_time_ranges}'
+                }
+            
+            # 检查服务器状态
+            if not self._get_any_healthy_server():
+                return {
+                    'error': '所有ComfyUI服务器均不可用，请稍后再试'
+                }
+            
+            # 检查用户并发限制
+            if not await self._check_user_task_limit(user_id):
+                return {
+                    'error': f'您当前有过多任务在执行中（最大{self.max_concurrent_tasks_per_user}个），请稍后再试'
+                }
+            
+            # 解析参数
+            args = []
+            for key, value in params.items():
+                args.append(f"{key}:{value}")
+            
+            parsed_params = self._parse_workflow_params(args, config)
+            
+            # 验证必需的参数
+            missing_params = self._validate_required_params(config, parsed_params)
+            if missing_params:
+                return {
+                    'error': f'缺少必需参数: {", ".join(missing_params)}'
+                }
+            
+            # 处理图片（如果有）
+            image_base64 = None
+            if image_path:
+                try:
+                    with open(image_path, 'rb') as f:
+                        image_data = f.read()
+                        image_base64 = base64.b64encode(image_data).decode('utf-8')
+                except Exception as e:
+                    return {
+                        'error': f'读取图片失败: {str(e)}'
+                    }
+            
+            # 创建任务
+            task_id = str(uuid.uuid4())
+            task_data = {
+                'type': 'workflow',
+                'workflow_name': workflow_name,
+                'params': parsed_params,
+                'image': image_base64,
+                'user_id': user_id,
+                'task_id': task_id,
+                'is_web_api': True
+            }
+            
+            # 提交任务到队列
+            try:
+                await self.task_queue.put(task_data)
+                logger.info(f"Web API workflow任务已提交: {task_id}")
+            except asyncio.QueueFull:
+                return {
+                    'error': '任务队列已满，请稍后再试'
+                }
+            
+            # 等待任务完成
+            result = await self._wait_for_task_completion(task_id, timeout=600)  # 10分钟超时
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"处理workflow请求失败: {e}")
+            return {
+                'error': f'处理请求失败: {str(e)}'
+            }
+
+    async def _wait_for_task_completion(self, task_id: str, timeout: int = 300) -> Dict[str, Any]:
+        """等待任务完成"""
+        try:
+            # 创建任务结果存储
+            if not hasattr(self, '_task_results'):
+                self._task_results = {}
+            
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                # 检查任务是否完成
+                if task_id in self._task_results:
+                    result = self._task_results.pop(task_id)
+                    return result
+                
+                await asyncio.sleep(1)
+            
+            return {
+                'error': '任务执行超时'
+            }
+            
+        except Exception as e:
+            logger.error(f"等待任务完成失败: {e}")
+            return {
+                'error': f'等待任务完成失败: {str(e)}'
+            }
+
     @property
     def config_manager(self):
         """配置管理器属性"""
@@ -4534,6 +6318,9 @@ class ModComfyUI(Star):
             
             # 停止帮助服务器
             await self._stop_help_server()
+            
+            # 停止Web API服务器
+            self._stop_web_api_server()
             
             # 清理临时文件
             await self.cleanup_temp_files()
@@ -4617,6 +6404,9 @@ class ConfigManager:
             "enable_auto_recall": False,
             "auto_recall_delay": 20,
             "enable_gui": False,
+            "enable_web_api": False,
+            "web_api_port": 7778,
+            "web_api_allow_register": True,
             "gui_port": 7777,
             "gui_username": "123",
             "gui_password": "123"
