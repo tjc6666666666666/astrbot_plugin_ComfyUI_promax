@@ -200,7 +200,7 @@
         "description": "自动保存目录",
         "type": "string",
         "default": "output",
-        "hint": "图片自动保存的根目录名，将在main.py同目录下创建，默认为output。目录结构：根目录/YYYY/MM/DD/"
+        "hint": "图片自动保存的根目录。支持绝对路径（如'/data/images'）和相对路径（如'output'）。绝对路径直接使用，相对路径基于插件数据目录(data/plugin_data/)。目录结构：根目录/YYYY/MM/DD/"
     },
     "enable_output_zip": {
         "description": "启用图片打包下载功能",
@@ -220,10 +220,71 @@
         "default": true,
         "hint": "控制用户是否只能下载自己生成的图片，true=只能下载自己的，false=可以下载所有图片"
     },
+
     "max_concurrent_tasks_per_user": {
         "description": "每个用户最大同时任务数",
         "type": "int",
         "default": 3,
         "hint": "每个QQ号同时排队的最大任务数（建议1-10，防止单个用户占用过多资源）"
+    },
+    "enable_auto_recall": {
+        "description": "启用主动撤回消息",
+        "type": "bool",
+        "default": false,
+        "hint": "控制是否自动撤回bot发送的文本消息（不包括图片和文件），true=启用，false=禁用"
+    },
+    "auto_recall_delay": {
+        "description": "主动撤回延迟时间",
+        "type": "int",
+        "default": 20,
+        "hint": "bot发送消息后多少秒自动撤回（建议5-120秒）"
+    },
+    "enable_gui": {
+        "description": "启用配置管理GUI界面",
+        "type": "bool",
+        "default": false,
+        "hint": "控制是否启用Web配置管理界面，true=启用，false=禁用"
+    },
+    "gui_port": {
+        "description": "配置管理GUI端口",
+        "type": "int",
+        "default": 7777,
+        "hint": "Web配置管理界面的端口号（建议1024-65535之间）"
+    },
+    "gui_username": {
+        "description": "GUI管理员用户名",
+        "type": "string",
+        "default": "123",
+        "hint": "Web配置管理界面的登录用户名"
+    },
+    "gui_password": {
+        "description": "GUI管理员密码",
+        "type": "string",
+        "default": "123",
+        "hint": "Web配置管理界面的登录密码"
+    },
+    "enable_web_api": {
+        "description": "启用Web API接口",
+        "type": "bool",
+        "default": false,
+        "hint": "控制是否启用Web API接口用于网页生成图片，true=启用，false=禁用"
+    },
+    "web_api_port": {
+        "description": "Web API端口",
+        "type": "int",
+        "default": 7778,
+        "hint": "Web API接口的端口号（建议1024-65535之间，默认7778）"
+    },
+    "web_api_allow_register": {
+        "description": "允许Web API注册新用户",
+        "type": "bool",
+        "default": true,
+        "hint": "控制是否允许用户通过Web API注册新账户，true=允许，false=禁止"
+    },
+    "web_api_image_proxy": {
+        "description": "启用Web API图片代理",
+        "type": "bool",
+        "default": true,
+        "hint": "控制Web API是否通过代理提供图片访问，避免暴露127.0.0.1地址，true=启用代理，false=直接返回ComfyUI地址"
     }
 }
