@@ -31,6 +31,10 @@ function loadMainConfig() {
         .then(data => {
             mainConfig = data;
             populateMainConfigForm(data);
+            
+            // 加载采样器和调度器选项
+            loadConfigSamplerOptions();
+            loadConfigSchedulerOptions();
         })
         .catch(error => {
             console.error('加载配置失败:', error);
@@ -349,4 +353,107 @@ function checkServerStatus() {
             console.error('检查服务器状态失败:', error);
             statusContainer.innerHTML = '<span class="text-danger">检查失败</span>';
         });
+}
+
+// 加载配置页面的采样器选项
+function loadConfigSamplerOptions() {
+    const samplerSelect = document.getElementById('configSamplerSelect');
+    if (!samplerSelect) return;
+    
+    // 默认采样器列表（与管理界面的配置同步）
+    const samplers = [
+        "euler",
+        "euler_cfg_pp", 
+        "euler_ancestral",
+        "euler_ancestral_cfg_pp",
+        "heun",
+        "heunpp2",
+        "dpm_2",
+        "dpm_2_ancestral",
+        "lms",
+        "dpm_fast",
+        "dpm_adaptive",
+        "dpmpp_2s_ancestral",
+        "dpmpp_2s_ancestral_cfg_pp",
+        "dpmpp_sde",
+        "dpmpp_sde_gpu",
+        "dpmpp_2m",
+        "dpmpp_2m_cfg_pp",
+        "dpmpp_2m_sde",
+        "dpmpp_2m_sde_gpu",
+        "dpmpp_2m_sde_heun",
+        "dpmpp_2m_sde_heun_gpu",
+        "dpmpp_3m_sde",
+        "dpmpp_3m_sde_gpu",
+        "ddpm",
+        "lcm",
+        "ipndm",
+        "ipndm_v",
+        "deis",
+        "res_multistep",
+        "res_multistep_cfg_pp",
+        "res_multistep_ancestral",
+        "res_multistep_ancestral_cfg_pp",
+        "gradient_estimation",
+        "gradient_estimation_cfg_pp",
+        "er_sde",
+        "seeds_2",
+        "seeds_3",
+        "sa_solver",
+        "sa_solver_pece",
+        "ddim",
+        "uni_pc",
+        "uni_pc_bh2"
+    ];
+    
+    // 清空现有选项（保留默认选项）
+    samplerSelect.innerHTML = '<option value="">默认采样器</option>';
+    
+    // 添加可用采样器
+    samplers.forEach(sampler => {
+        const option = document.createElement('option');
+        option.value = sampler;
+        option.textContent = sampler;
+        samplerSelect.appendChild(option);
+    });
+    
+    // 设置当前配置值
+    if (mainConfig && mainConfig.sampler_name) {
+        samplerSelect.value = mainConfig.sampler_name;
+    }
+}
+
+// 加载配置页面的调度器选项
+function loadConfigSchedulerOptions() {
+    const schedulerSelect = document.getElementById('configSchedulerSelect');
+    if (!schedulerSelect) return;
+    
+    // 默认调度器列表
+    const schedulers = [
+        "simple",
+        "sgm_uniform",
+        "karras",
+        "exponential",
+        "ddim_uniform",
+        "beta",
+        "normal",
+        "linear_quadratic",
+        "kl_optimal"
+    ];
+    
+    // 清空现有选项（保留默认选项）
+    schedulerSelect.innerHTML = '<option value="">默认调度器</option>';
+    
+    // 添加可用调度器
+    schedulers.forEach(scheduler => {
+        const option = document.createElement('option');
+        option.value = scheduler;
+        option.textContent = scheduler;
+        schedulerSelect.appendChild(option);
+    });
+    
+    // 设置当前配置值
+    if (mainConfig && mainConfig.scheduler) {
+        schedulerSelect.value = mainConfig.scheduler;
+    }
 }
