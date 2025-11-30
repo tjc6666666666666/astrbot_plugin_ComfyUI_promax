@@ -938,7 +938,7 @@ class ModComfyUI(Star):
             
             if os.path.exists(help_image_path):
                 # 使用缓存的图片，传递文件路径
-                await event.send(event.image_result(help_image_path))
+                await event.send(event.image_result(str(help_image_path)))
                 return True
             
             # 生成帮助图片
@@ -957,7 +957,7 @@ class ModComfyUI(Star):
                 await loop.run_in_executor(None, write_help_image)
                 
                 # 发送图片，传递文件路径
-                await event.send(event.image_result(help_image_path))
+                await event.send(event.image_result(str(help_image_path)))
                 return True
             
             return False
@@ -2107,12 +2107,25 @@ class ModComfyUI(Star):
         # 获取图片URL（使用代理模式）
         image_urls = []
         for image_info in image_info_list:
-            # 先保存图片，获取保存后的文件名
-            saved_filename = await self._save_image_locally(server, image_info["filename"], "aimg", user_id)
+            # 先保存文件，获取保存后的文件名
+            saved_filename = await self._save_image_locally(
+                server, 
+                image_info["filename"], 
+                "aimg", 
+                user_id,
+                image_info.get("subfolder", ""),
+                image_info.get("type", "output")
+            )
             
             # 如果启用了保存，使用保存后的文件名；否则使用原始文件名
             filename_for_url = saved_filename if saved_filename else image_info["filename"]
-            image_url = await self._get_image_url(server, filename_for_url, use_proxy=True)
+            image_url = await self._get_image_url(
+                server=server, 
+                filename=filename_for_url, 
+                use_proxy=True,
+                subfolder=image_info.get("subfolder", ""),
+                file_type=image_info.get("type", "output")
+            )
             image_urls.append(image_url)
             
             # 记录图片生成（如果已经保存过就不重复记录）
@@ -2186,12 +2199,25 @@ class ModComfyUI(Star):
             # 获取图片URL（使用代理模式）
             image_urls = []
             for image_info in image_info_list:
-                # 先保存图片，获取保存后的文件名
-                saved_filename = await self._save_image_locally(server, image_info["filename"], "img2img", user_id)
+                # 先保存文件，获取保存后的文件名
+                saved_filename = await self._save_image_locally(
+                    server, 
+                    image_info["filename"], 
+                    "img2img", 
+                    user_id,
+                    image_info.get("subfolder", ""),
+                    image_info.get("type", "output")
+                )
                 
                 # 如果启用了保存，使用保存后的文件名；否则使用原始文件名
                 filename_for_url = saved_filename if saved_filename else image_info["filename"]
-                image_url = await self._get_image_url(server, filename_for_url, use_proxy=True)
+                image_url = await self._get_image_url(
+                server=server, 
+                filename=filename_for_url, 
+                use_proxy=True,
+                subfolder=image_info.get("subfolder", ""),
+                file_type=image_info.get("type", "output")
+            )
                 image_urls.append(image_url)
                 
                 # 记录图片生成（如果已经保存过就不重复记录）
@@ -2283,11 +2309,24 @@ class ModComfyUI(Star):
                 if node_output and node_output.get("images"):
                     for image_info in node_output["images"]:
                         # 先保存图片，获取保存后的文件名
-                        saved_filename = await self._save_image_locally(server, image_info["filename"], f"workflow_{workflow_name}", user_id)
+                        saved_filename = await self._save_image_locally(
+                            server, 
+                            image_info["filename"], 
+                            f"workflow_{workflow_name}", 
+                            user_id,
+                            image_info.get("subfolder", ""),
+                            image_info.get("type", "output")
+                        )
                         
                         # 如果启用了保存，使用保存后的文件名；否则使用原始文件名
                         filename_for_url = saved_filename if saved_filename else image_info["filename"]
-                        image_url = await self._get_image_url(server, filename_for_url, use_proxy=True)
+                        image_url = await self._get_image_url(
+                server=server, 
+                filename=filename_for_url, 
+                use_proxy=True,
+                subfolder=image_info.get("subfolder", ""),
+                file_type=image_info.get("type", "output")
+            )
                         image_urls.append(image_url)
                         
                         # 记录图片生成（如果已经保存过就不重复记录）
@@ -2350,18 +2389,62 @@ class ModComfyUI(Star):
             raise Exception("任务超时或未完成（超时10分钟）")
         image_info_list = self._extract_batch_image_info(history_data)
         if not image_info_list or len(image_info_list) == 0:
-            raise Exception("未从ComfyUI历史数据中找到图片")
+            raise Exception("未从ComfyUI历史数据中找到图片或3D模型")
+        
+        # 检查是否为3D模型文件
+        is_3d_model = any(info.get("filename", "").lower().endswith('.glb') for info in image_info_list)
+        
         image_urls = []
+        model_3d_files = []  # 存储3D模型文件信息
+        
         for idx, image_info in enumerate(image_info_list, 1):
-            image_url = await self._get_image_url(server, image_info["filename"])
-            image_urls.append((idx, image_url))
+            filename = image_info["filename"]
+            subfolder = image_info.get("subfolder", "")
             
-            # 静悄悄保存图片
-            await self._save_image_locally(server, image_info["filename"], prompt, user_id or "")
+            # 检查是否为3D模型文件
+            if filename.lower().endswith('.glb'):
+                # 构建3D模型文件URL
+                if subfolder:
+                    model_3d_url = f"{server.url}/view?filename={filename}&type=output&subfolder={subfolder}"
+                else:
+                    model_3d_url = f"{server.url}/view?filename={filename}&type=output"
+                
+                model_3d_files.append({
+                    "filename": filename,
+                    "url": model_3d_url,
+                    "subfolder": subfolder
+                })
+            else:
+                # 处理图片文件
+                image_url = await self._get_image_url(
+                    server, 
+                    filename, 
+                    use_proxy=False,
+                    subfolder=subfolder,
+                    file_type=image_info.get("type", "output")
+                )
+                image_urls.append((idx, image_url))
+                
+                # 静悄悄保存文件
+                await self._save_image_locally(
+                    server, 
+                    filename, 
+                    prompt, 
+                    user_id or "",
+                    subfolder,
+                    image_info.get("type", "output")
+                )
+        # 构建结果消息
+        result_parts = []
+        if image_urls:
+            result_parts.append(f"{len(image_urls)}张图片")
+        if model_3d_files:
+            result_parts.append(f"{len(model_3d_files)}个3D模型")
+        
         if image_filename:
-            result_text = f"提示词：{self._truncate_prompt(prompt)}\nSeed：{current_seed}\n噪声系数：{denoise}\n批量数：{current_batch_size}\n{task_type}生成完成！\n所有图片已合并为一条消息发送～"
+            result_text = f"提示词：{self._truncate_prompt(prompt)}\nSeed：{current_seed}\n噪声系数：{denoise}\n批量数：{current_batch_size}\n{task_type}生成完成！\n共{'、'.join(result_parts)}已合并为一条消息发送～"
         else:
-            result_text = f"提示词：{self._truncate_prompt(prompt)}\nSeed：{current_seed}\n分辨率：{current_width}x{current_height}\n批量数：{current_batch_size}\n{task_type}生成完成！\n所有图片已合并为一条消息发送～"
+            result_text = f"提示词：{self._truncate_prompt(prompt)}\nSeed：{current_seed}\n分辨率：{current_width}x{current_height}\n批量数：{current_batch_size}\n{task_type}生成完成！\n共{'、'.join(result_parts)}已合并为一条消息发送～"
         if lora_list:
             lora_result_info = "\n使用LoRA：" + " | ".join([
                 f"{lora['name']}（model:{lora['strength_model']}, clip:{lora['strength_clip']}）"
@@ -2372,12 +2455,29 @@ class ModComfyUI(Star):
         # 构建合并的消息链
         merged_chain = []
         merged_chain.append(Plain(result_text))
-        merged_chain.append(Plain(f"\n\n共{current_batch_size}张图片："))
+        merged_chain.append(Plain(f"\n\n共{'、'.join(result_parts)}："))
         
         # 添加图片
         for idx, img_url in image_urls:
-            merged_chain.append(Plain(f"\n\n第{idx}/{current_batch_size}张："))
+            merged_chain.append(Plain(f"\n\n第{idx}/{len(image_urls) + len(model_3d_files)}张："))
             merged_chain.append(Image.fromURL(img_url))
+        
+        # 添加3D模型（作为文件上传）
+        if model_3d_files:
+            for idx, model_3d_info in enumerate(model_3d_files):
+                model_3d_idx = len(image_urls) + idx + 1
+                merged_chain.append(Plain(f"\n\n第{model_3d_idx}/{len(image_urls) + len(model_3d_files)}个3D模型：正在上传文件..."))
+                
+                # 下载并上传3D模型文件
+                try:
+                    model_3d_path = await self._download_and_upload_3d_model(event, server, model_3d_info)
+                    if model_3d_path:
+                        merged_chain.append(Plain(f"\n✅ 3D模型{model_3d_idx}已上传为文件"))
+                    else:
+                        merged_chain.append(Plain(f"\n❌ 3D模型{model_3d_idx}上传失败"))
+                except Exception as e:
+                    logger.error(f"3D模型上传失败: {e}")
+                    merged_chain.append(Plain(f"\n❌ 3D模型{model_3d_idx}上传失败: {str(e)}"))
         
         # 一次性发送合并的消息
         await event.send(event.chain_result(merged_chain))
@@ -2406,30 +2506,115 @@ class ModComfyUI(Star):
         if not history_data or history_data.get("status", {}).get("completed") is False:
             raise Exception("任务超时或未完成（超时10分钟）")
         
-        # 提取输出图片
+        # 提取输出图片、视频、音频和3D模型
         output_nodes = config.get("output_nodes", [])
         output_mappings = config.get("output_mappings", {})
         image_urls = []
+        video_files = []  # 存储视频文件信息
+        audio_files = []  # 存储音频文件信息
+        model_3d_files = []  # 存储3D模型文件信息
         
         for node_id in output_nodes:
             if node_id in output_mappings:
                 outputs = history_data.get("outputs", {})
                 node_output = outputs.get(node_id)
+                
+                # 处理图片输出
                 if node_output and node_output.get("images"):
-                    for idx, image_info in enumerate(node_output["images"]):
-                        image_url = await self._get_image_url(server, image_info["filename"])
-                        image_urls.append((len(image_urls) + 1, image_url))
+                    for idx, file_info in enumerate(node_output["images"]):
+                        filename = file_info["filename"]
+                        subfolder = file_info.get("subfolder", "")
                         
-                        # 静悄悄保存图片
-                        await self._save_image_locally(server, image_info["filename"], f"workflow_{workflow_name}", user_id or "")
+                        # 检查是否为视频文件
+                        is_video = (filename.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')) or 
+                                   node_output.get("animated", False))
+                        
+                        if is_video:
+                            # 处理视频文件
+                            if subfolder:
+                                video_url = f"{server.url}/view?filename={filename}&type=output&subfolder={subfolder}"
+                            else:
+                                video_url = f"{server.url}/view?filename={filename}&type=output"
+                            
+                            video_files.append({
+                                "filename": filename,
+                                "url": video_url,
+                                "subfolder": subfolder
+                            })
+                        else:
+                            # 处理图片文件
+                            image_url = await self._get_image_url(
+                                server, 
+                                filename, 
+                                use_proxy=False,
+                                subfolder=subfolder,
+                                file_type=file_info.get("type", "output")
+                            )
+                            image_urls.append((len(image_urls) + len(video_files) + len(audio_files) + 1, image_url))
+                            
+                            # 静悄悄保存文件
+                            await self._save_image_locally(
+                                server, 
+                                filename, 
+                                f"workflow_{workflow_name}", 
+                                user_id or "",
+                                subfolder,
+                                file_info.get("type", "output")
+                            )
+                
+                # 处理音频输出
+                if node_output and node_output.get("audio"):
+                    for idx, file_info in enumerate(node_output["audio"]):
+                        filename = file_info["filename"]
+                        subfolder = file_info.get("subfolder", "")
+                        
+                        # 构建音频文件URL
+                        if subfolder:
+                            audio_url = f"{server.url}/view?filename={filename}&type=output&subfolder={subfolder}"
+                        else:
+                            audio_url = f"{server.url}/view?filename={filename}&type=output"
+                        
+                        audio_files.append({
+                            "filename": filename,
+                            "url": audio_url,
+                            "subfolder": subfolder
+                        })
+                
+                # 处理3D模型输出
+                if node_output and node_output.get("3d"):
+                    for idx, file_info in enumerate(node_output["3d"]):
+                        filename = file_info["filename"]
+                        subfolder = file_info.get("subfolder", "")
+                        
+                        # 构建3D模型文件URL
+                        if subfolder:
+                            model_3d_url = f"{server.url}/view?filename={filename}&type=output&subfolder={subfolder}"
+                        else:
+                            model_3d_url = f"{server.url}/view?filename={filename}&type=output"
+                        
+                        model_3d_files.append({
+                            "filename": filename,
+                            "url": model_3d_url,
+                            "subfolder": subfolder
+                        })
         
-        if not image_urls:
+        if not image_urls and not video_files and not audio_files and not model_3d_files:
             # 检查是否有其他类型的输出
-            await self._send_with_auto_recall(event, event.plain_result(f"Workflow「{config['name']}」执行完成，但未检测到图片输出"))
+            await self._send_with_auto_recall(event, event.plain_result(f"Workflow「{config['name']}」执行完成，但未检测到图片、视频、音频或3D模型输出"))
             return
         
         # 构建结果消息
-        result_text = f"Workflow「{config['name']}」执行完成！\n共{len(image_urls)}张图片："
+        result_parts = []
+        if image_urls:
+            result_parts.append(f"{len(image_urls)}张图片")
+        if video_files:
+            result_parts.append(f"{len(video_files)}个视频")
+        if audio_files:
+            result_parts.append(f"{len(audio_files)}个音频")
+        if model_3d_files:
+            result_parts.append(f"{len(model_3d_files)}个3D模型")
+        
+        result_text = f"Workflow「{config['name']}」执行完成！\n共{'、'.join(result_parts)}："
         
         # 构建合并的消息链
         merged_chain = []
@@ -2437,8 +2622,59 @@ class ModComfyUI(Star):
         
         # 添加图片
         for idx, img_url in image_urls:
-            merged_chain.append(Plain(f"\n\n第{idx}/{len(image_urls)}张："))
+            merged_chain.append(Plain(f"\n\n第{idx}/{len(image_urls) + len(video_files) + len(audio_files) + len(model_3d_files)}张图片："))
             merged_chain.append(Image.fromURL(img_url))
+        
+        # 添加视频（作为文件上传）
+        if video_files:
+            for idx, video_info in enumerate(video_files):
+                video_idx = len(image_urls) + idx + 1
+                merged_chain.append(Plain(f"\n\n第{video_idx}/{len(image_urls) + len(video_files) + len(audio_files) + len(model_3d_files)}个视频：正在上传文件..."))
+                
+                # 下载并上传视频文件
+                try:
+                    video_path = await self._download_and_upload_video(event, server, video_info)
+                    if video_path:
+                        merged_chain.append(Plain(f"\n✅ 视频{video_idx}已上传为文件"))
+                    else:
+                        merged_chain.append(Plain(f"\n❌ 视频{video_idx}上传失败"))
+                except Exception as e:
+                    logger.error(f"视频上传失败: {e}")
+                    merged_chain.append(Plain(f"\n❌ 视频{video_idx}上传失败: {str(e)}"))
+        
+        # 添加音频（作为文件上传）
+        if audio_files:
+            for idx, audio_info in enumerate(audio_files):
+                audio_idx = len(image_urls) + len(video_files) + idx + 1
+                merged_chain.append(Plain(f"\n\n第{audio_idx}/{len(image_urls) + len(video_files) + len(audio_files) + len(model_3d_files)}个音频：正在上传文件..."))
+                
+                # 下载并上传音频文件
+                try:
+                    audio_path = await self._download_and_upload_audio(event, server, audio_info)
+                    if audio_path:
+                        merged_chain.append(Plain(f"\n✅ 音频{audio_idx}已上传为文件"))
+                    else:
+                        merged_chain.append(Plain(f"\n❌ 音频{audio_idx}上传失败"))
+                except Exception as e:
+                    logger.error(f"音频上传失败: {e}")
+                    merged_chain.append(Plain(f"\n❌ 音频{audio_idx}上传失败: {str(e)}"))
+        
+        # 添加3D模型（作为文件上传）
+        if model_3d_files:
+            for idx, model_3d_info in enumerate(model_3d_files):
+                model_3d_idx = len(image_urls) + len(video_files) + len(audio_files) + idx + 1
+                merged_chain.append(Plain(f"\n\n第{model_3d_idx}/{len(image_urls) + len(video_files) + len(audio_files) + len(model_3d_files)}个3D模型：正在上传文件..."))
+                
+                # 下载并上传3D模型文件
+                try:
+                    model_3d_path = await self._download_and_upload_3d_model(event, server, model_3d_info)
+                    if model_3d_path:
+                        merged_chain.append(Plain(f"\n✅ 3D模型{model_3d_idx}已上传为文件"))
+                    else:
+                        merged_chain.append(Plain(f"\n❌ 3D模型{model_3d_idx}上传失败"))
+                except Exception as e:
+                    logger.error(f"3D模型上传失败: {e}")
+                    merged_chain.append(Plain(f"\n❌ 3D模型{model_3d_idx}上传失败: {str(e)}"))
         
         # 一次性发送合并的消息
         await event.send(event.chain_result(merged_chain))
@@ -2517,30 +2753,89 @@ class ModComfyUI(Star):
     def _extract_batch_image_info(self, history_data: Dict[str, Any]) -> List[Dict[str, str]]:
         outputs = history_data.get("outputs", {})
         save_node_data = outputs.get("9") or outputs.get("50")
-        if not save_node_data or not save_node_data.get("images"):
-            raise Exception("未找到SaveImage节点的输出图片")
-        return save_node_data["images"]
+        
+        # 首先检查图片输出
+        if save_node_data and save_node_data.get("images"):
+            return save_node_data["images"]
+        
+        # 检查各种类型的输出文件（3D模型、音频、视频等）
+        for node_id, node_data in outputs.items():
+            # 检查3D模型输出
+            if node_data.get("3d"):
+                model_files = []
+                for model_info in node_data["3d"]:
+                    model_files.append({
+                        "filename": model_info["filename"],
+                        "subfolder": model_info.get("subfolder", ""),
+                        "type": model_info.get("type", "output"),
+                        "file_type": "3d"
+                    })
+                return model_files
+            
+            # 检查音频输出
+            if node_data.get("audio"):
+                audio_files = []
+                for audio_info in node_data["audio"]:
+                    audio_files.append({
+                        "filename": audio_info["filename"],
+                        "subfolder": audio_info.get("subfolder", ""),
+                        "type": audio_info.get("type", "output"),
+                        "file_type": "audio"
+                    })
+                return audio_files
+            
+            # 检查视频输出
+            if node_data.get("video"):
+                video_files = []
+                for video_info in node_data["video"]:
+                    video_files.append({
+                        "filename": video_info["filename"],
+                        "subfolder": video_info.get("subfolder", ""),
+                        "type": video_info.get("type", "output"),
+                        "file_type": "video"
+                    })
+                return video_files
+            
+            # 检查其他可能的输出类型
+            for output_type in ["mesh", "model", "file", "output"]:
+                if node_data.get(output_type):
+                    output_files = []
+                    for file_info in node_data[output_type]:
+                        output_files.append({
+                            "filename": file_info["filename"],
+                            "subfolder": file_info.get("subfolder", ""),
+                            "type": file_info.get("type", "output"),
+                            "file_type": output_type
+                        })
+                    return output_files
+        
+        raise Exception("未找到任何输出文件（图片、3D模型、音频、视频等）")
 
-    async def _get_image_url(self, server: ServerState, filename: str, use_proxy: bool = False) -> str:
-        """获取图片URL
+    async def _get_image_url(self, server: ServerState, filename: str, use_proxy: bool = False, subfolder: str = "", file_type: str = "output") -> str:
+        """获取文件URL（支持图片、3D模型、音频、视频等）
         
         Args:
             server: ComfyUI服务器状态
-            filename: 图片文件名
+            filename: 文件名
             use_proxy: 是否使用代理模式（用于Web API）
+            subfolder: 子文件夹路径
+            file_type: 文件类型（output、input等）
         """
         if use_proxy and self.enable_web_api and self.web_api_image_proxy:
             # Web API模式：返回相对路径，让浏览器自动适配当前域名
-            # 这样可以避免暴露127.0.0.1地址，外部用户可以通过Web服务器访问图片
+            # 这样可以避免暴露127.0.0.1地址，外部用户可以通过Web服务器访问文件
             return f"/api/image/{filename}"
         else:
             # 默认模式：直接返回ComfyUI地址（用于内部机器人消息）
-            url_params = {"filename": filename, "type": "output", "subfolder": "", "preview": "true"}
+            url_params = {"filename": filename, "type": file_type, "subfolder": subfolder}
+            # 对于图片文件，添加preview参数
+            if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp')):
+                url_params["preview"] = "true"
             query_str = "&".join([f"{k}={quote(v)}" for k, v in url_params.items()])
             return f"{server.url}/view?{query_str}"
 
-    async def _save_image_locally(self, server: ServerState, filename: str, prompt: str = "", user_id: str = "") -> Optional[str]:
-        """静悄悄保存图片到本地
+    async def _save_image_locally(self, server: ServerState, filename: str, prompt: str = "", user_id: str = "", subfolder: str = "", file_type: str = "output") -> Optional[str]:
+        """静悄悄保存文件到本地（支持图片、3D模型、音频、视频等）
         
         Returns:
             保存后的文件名（包含时间戳前缀），如果未启用保存则返回None
@@ -2549,16 +2844,16 @@ class ModComfyUI(Star):
             return None
             
         try:
-            # 获取图片URL
-            image_url = await self._get_image_url(server, filename)
+            # 获取文件URL
+            file_url = await self._get_image_url(server, filename, use_proxy=False, subfolder=subfolder, file_type=file_type)
             
-            # 下载图片
+            # 下载文件
             async with aiohttp.ClientSession() as session:
-                async with session.get(image_url, timeout=30) as resp:
+                async with session.get(file_url, timeout=30) as resp:
                     if resp.status != 200:
-                        logger.warning(f"下载图片失败，HTTP状态码: {resp.status}")
+                        logger.warning(f"下载文件失败，HTTP状态码: {resp.status}")
                         return None
-                    image_data = await resp.read()
+                    file_data = await resp.read()
             
             # 创建保存目录
             now = datetime.now()
@@ -2573,29 +2868,62 @@ class ModComfyUI(Star):
             # 生成带时间戳的文件名
             timestamp = now.strftime("%Y%m%d_%H%M%S_")
             original_name = filename
-            if not original_name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                original_name += '.png'
+            
+            # 根据文件扩展名判断文件类型，不再强制添加.png扩展名
+            file_extensions = {
+                # 图片格式
+                '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff', '.tif',
+                # 3D模型格式
+                '.glb', '.gltf', '.obj', '.fbx', '.dae', '.3ds', '.blend',
+                # 音频格式
+                '.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a', '.wma',
+                # 视频格式
+                '.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.mkv', '.m4v',
+                # 其他格式
+                '.zip', '.rar', '.7z', '.tar', '.gz'
+            }
+            
+            # 检查文件是否已有有效扩展名
+            has_valid_extension = any(original_name.lower().endswith(ext) for ext in file_extensions)
+            
+            # 如果没有有效扩展名，根据文件类型或内容添加默认扩展名
+            if not has_valid_extension:
+                if file_type == "3d" or any(keyword in filename.lower() for keyword in ['mesh', 'model', '3d']):
+                    original_name += '.glb'  # 3D模型默认格式
+                elif file_type == "audio" or any(keyword in filename.lower() for keyword in ['audio', 'sound']):
+                    original_name += '.wav'  # 音频默认格式
+                elif file_type == "video" or any(keyword in filename.lower() for keyword in ['video', 'movie']):
+                    original_name += '.mp4'  # 视频默认格式
+                else:
+                    original_name += '.png'  # 默认为图片格式
+            
             saved_filename = timestamp + original_name
             save_path = save_dir / saved_filename
             
-            # 保存图片 - 使用异步文件写入
-            def write_image_file():
+            # 保存文件 - 使用异步文件写入
+            def write_file():
                 with open(save_path, 'wb') as f:
-                    f.write(image_data)
+                    f.write(file_data)
             
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, write_image_file)
+            await loop.run_in_executor(None, write_file)
             
-            logger.info(f"图片已自动保存: {save_path}")
+            # 根据文件类型记录不同的日志信息
+            file_type_names = {
+                "3d": "3D模型", "audio": "音频", "video": "视频", 
+                "mesh": "3D网格", "model": "模型", "file": "文件"
+            }
+            file_desc = file_type_names.get(file_type, "文件")
+            logger.info(f"{file_desc}已自动保存: {save_path}")
             
-            # 记录图片生成信息
+            # 记录文件生成信息
             if user_id:
                 asyncio.create_task(self._record_image_generation(saved_filename, user_id))
             
             return saved_filename
             
         except Exception as e:
-            logger.error(f"自动保存图片失败: {str(e)}")
+            logger.error(f"自动保存文件失败: {str(e)}")
 
     async def _upload_image_to_comfyui(self, server: ServerState, img_path: str) -> str:
         url = f"{server.url}/upload/image"
@@ -3587,6 +3915,318 @@ class ModComfyUI(Star):
             logger.error(f"创建压缩包失败: {e}")
             return None
 
+    async def _download_and_upload_video(self, event: AstrMessageEvent, server: ServerState, video_info: Dict[str, Any]) -> Optional[str]:
+        """下载视频文件并上传到QQ群文件或个人文件"""
+        try:
+            # 获取视频URL
+            video_url = video_info["url"]
+            filename = video_info["filename"]
+            
+            # 下载视频文件
+            async with aiohttp.ClientSession() as session:
+                async with session.get(video_url, timeout=120) as resp:  # 增加超时时间，视频文件较大
+                    if resp.status != 200:
+                        logger.warning(f"下载视频失败，HTTP状态码: {resp.status}")
+                        return None
+                    video_data = await resp.read()
+            
+            # 创建临时文件目录
+            temp_dir = self.data_dir / "temp"
+            temp_dir.mkdir(exist_ok=True)
+            
+            # 保存到临时文件
+            temp_video_path = temp_dir / filename
+            def write_video_file():
+                with open(temp_video_path, 'wb') as f:
+                    f.write(video_data)
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, write_video_file)
+            
+            logger.info(f"视频已下载到临时文件: {temp_video_path}")
+            
+            # 如果启用了自动保存，则永久保存视频文件
+            saved_filename = None
+            if self.enable_auto_save:
+                try:
+                    # 使用_save_image_locally方法保存文件，传入正确的参数
+                    saved_filename = await self._save_image_locally(
+                        server=server,
+                        filename=filename,
+                        prompt="视频生成",
+                        user_id=event.get_sender_id() or "",
+                        subfolder=video_info.get("subfolder", ""),
+                        file_type=video_info.get("type", "output")
+                    )
+                    if saved_filename:
+                        logger.info(f"视频已自动保存: {saved_filename}")
+                except Exception as e:
+                    logger.warning(f"视频自动保存失败: {e}")
+            
+            # 上传视频文件到QQ
+            upload_success = await self._upload_video_file(event, str(temp_video_path), filename)
+            
+            # 清理临时文件
+            try:
+                await asyncio.sleep(2)  # 等待上传完成
+                def remove_temp_file():
+                    if temp_video_path.exists():
+                        temp_video_path.unlink()
+                await loop.run_in_executor(None, remove_temp_file)
+                logger.info(f"临时视频文件已清理: {temp_video_path}")
+            except Exception as e:
+                logger.warning(f"清理临时视频文件失败: {e}")
+            
+            return str(temp_video_path) if upload_success else None
+            
+        except Exception as e:
+            logger.error(f"下载并上传视频失败: {e}")
+            return None
+
+    async def _upload_video_file(self, event: AstrMessageEvent, video_path: str, filename: str) -> bool:
+        """上传视频文件到群文件或个人文件"""
+        try:
+            # 检查是否为QQ平台
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+            if not isinstance(event, AiocqhttpMessageEvent):
+                logger.info("非QQ平台不支持文件上传功能")
+                return False
+            
+            # 获取群ID和发送者QQ号
+            group_id = event.get_group_id()
+            sender_qq = event.get_sender_id()
+            
+            if group_id:  # 群聊场景
+                client = event.bot
+                await client.upload_group_file(
+                    group_id=group_id,
+                    file=video_path,
+                    name=filename
+                )
+                logger.info(f"视频已上传到群文件: 群ID={group_id}, 文件={filename}")
+            else:  # 私聊场景
+                client = event.bot
+                await client.upload_private_file(
+                    user_id=int(sender_qq),
+                    file=video_path,
+                    name=filename
+                )
+                logger.info(f"视频已上传到个人文件: 用户QQ={sender_qq}, 文件={filename}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"上传视频文件失败: {e}")
+            return False
+
+    async def _download_and_upload_audio(self, event: AstrMessageEvent, server: ServerState, audio_info: Dict[str, Any]) -> Optional[str]:
+        """下载音频文件并上传到QQ群文件或个人文件"""
+        try:
+            # 获取音频URL
+            audio_url = audio_info["url"]
+            filename = audio_info["filename"]
+            
+            # 下载音频文件
+            async with aiohttp.ClientSession() as session:
+                async with session.get(audio_url, timeout=60) as resp:  # 音频文件通常比视频小
+                    if resp.status != 200:
+                        logger.warning(f"下载音频失败，HTTP状态码: {resp.status}")
+                        return None
+                    audio_data = await resp.read()
+            
+            # 创建临时文件目录
+            temp_dir = self.data_dir / "temp"
+            temp_dir.mkdir(exist_ok=True)
+            
+            # 保存到临时文件
+            temp_audio_path = temp_dir / filename
+            def write_audio_file():
+                with open(temp_audio_path, 'wb') as f:
+                    f.write(audio_data)
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, write_audio_file)
+            
+            logger.info(f"音频已下载到临时文件: {temp_audio_path}")
+            
+            # 如果启用了自动保存，则永久保存音频文件
+            saved_filename = None
+            if self.enable_auto_save:
+                try:
+                    # 使用_save_image_locally方法保存文件，传入正确的参数
+                    saved_filename = await self._save_image_locally(
+                        server=server,
+                        filename=filename,
+                        prompt="音频生成",
+                        user_id=event.get_sender_id() or "",
+                        subfolder=audio_info.get("subfolder", ""),
+                        file_type=audio_info.get("type", "output")
+                    )
+                    if saved_filename:
+                        logger.info(f"音频已自动保存: {saved_filename}")
+                except Exception as e:
+                    logger.warning(f"音频自动保存失败: {e}")
+            
+            # 上传音频文件到QQ
+            upload_success = await self._upload_audio_file(event, str(temp_audio_path), filename)
+            
+            # 清理临时文件
+            try:
+                await asyncio.sleep(2)  # 等待上传完成
+                def remove_temp_file():
+                    if temp_audio_path.exists():
+                        temp_audio_path.unlink()
+                await loop.run_in_executor(None, remove_temp_file)
+                logger.info(f"临时音频文件已清理: {temp_audio_path}")
+            except Exception as e:
+                logger.warning(f"清理临时音频文件失败: {e}")
+            
+            return str(temp_audio_path) if upload_success else None
+            
+        except Exception as e:
+            logger.error(f"下载并上传音频失败: {e}")
+            return None
+
+    async def _upload_audio_file(self, event: AstrMessageEvent, audio_path: str, filename: str) -> bool:
+        """上传音频文件到群文件或个人文件"""
+        try:
+            # 检查是否为QQ平台
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+            if isinstance(event, AiocqhttpMessageEvent):
+                client = event.bot
+                
+                # 获取发送者和群组信息
+                group_id = event.get_group_id()
+                sender_qq = event.get_sender_id()
+                
+                if group_id:
+                    # 群聊：上传到群文件
+                    await client.upload_group_file(
+                        group_id=int(group_id),
+                        file=audio_path,
+                        name=filename
+                    )
+                    logger.info(f"音频已上传到群文件: 群ID={group_id}, 文件={filename}")
+                else:
+                    # 私聊：上传到个人文件
+                    await client.upload_private_file(
+                        user_id=int(sender_qq),
+                        file=audio_path,
+                        name=filename
+                    )
+                    logger.info(f"音频已上传到个人文件: 用户QQ={sender_qq}, 文件={filename}")
+                
+                return True
+            else:
+                logger.warning("非QQ平台，不支持音频文件上传")
+                return False
+                
+        except Exception as e:
+            logger.error(f"上传音频文件失败: {e}")
+            return False
+
+    async def _download_and_upload_3d_model(self, event: AstrMessageEvent, server: ServerState, model_3d_info: Dict[str, Any]) -> Optional[str]:
+        """下载3D模型文件并上传到QQ群文件或个人文件"""
+        try:
+            # 获取3D模型URL
+            model_3d_url = model_3d_info["url"]
+            filename = model_3d_info["filename"]
+            
+            # 下载3D模型文件
+            async with aiohttp.ClientSession() as session:
+                async with session.get(model_3d_url, timeout=120) as resp:  # 3D模型文件可能较大
+                    if resp.status != 200:
+                        logger.warning(f"下载3D模型失败，HTTP状态码: {resp.status}")
+                        return None
+                    model_3d_data = await resp.read()
+            
+            # 创建临时文件目录
+            temp_dir = self.data_dir / "temp"
+            temp_dir.mkdir(exist_ok=True)
+            
+            # 保存到临时文件
+            temp_model_3d_path = temp_dir / filename
+            def write_model_3d_file():
+                with open(temp_model_3d_path, 'wb') as f:
+                    f.write(model_3d_data)
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, write_model_3d_file)
+            
+            logger.info(f"3D模型已下载到临时文件: {temp_model_3d_path}")
+            
+            # 如果启用了自动保存，则永久保存3D模型文件
+            saved_filename = None
+            if self.enable_auto_save:
+                try:
+                    # 使用_save_image_locally方法保存文件，传入正确的参数
+                    saved_filename = await self._save_image_locally(
+                        server=server,
+                        filename=filename,
+                        prompt="3D模型生成",
+                        user_id=event.get_sender_id() or "",
+                        subfolder=model_3d_info.get("subfolder", ""),
+                        file_type=model_3d_info.get("type", "output")
+                    )
+                    if saved_filename:
+                        logger.info(f"3D模型已自动保存: {saved_filename}")
+                except Exception as e:
+                    logger.warning(f"3D模型自动保存失败: {e}")
+            
+            # 上传3D模型文件到QQ
+            upload_success = await self._upload_3d_model_file(event, str(temp_model_3d_path), filename)
+            
+            # 清理临时文件
+            try:
+                await asyncio.sleep(2)  # 等待上传完成
+                def remove_temp_file():
+                    if temp_model_3d_path.exists():
+                        temp_model_3d_path.unlink()
+                await loop.run_in_executor(None, remove_temp_file)
+                logger.info(f"临时3D模型文件已清理: {temp_model_3d_path}")
+            except Exception as e:
+                logger.warning(f"清理临时3D模型文件失败: {e}")
+            
+            return str(temp_model_3d_path) if upload_success else None
+            
+        except Exception as e:
+            logger.error(f"下载并上传3D模型失败: {e}")
+            return None
+
+    async def _upload_3d_model_file(self, event: AstrMessageEvent, model_3d_path: str, filename: str) -> bool:
+        """上传3D模型文件到群文件或个人文件"""
+        try:
+            # 检查是否为QQ平台
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+            if not isinstance(event, AiocqhttpMessageEvent):
+                logger.info("非QQ平台不支持文件上传功能")
+                return False
+            
+            # 获取群ID和发送者QQ号
+            group_id = event.get_group_id()
+            sender_qq = event.get_sender_id()
+            
+            if group_id:  # 群聊场景
+                client = event.bot
+                await client.upload_group_file(
+                    group_id=group_id,
+                    file=model_3d_path,
+                    name=filename
+                )
+                logger.info(f"3D模型已上传到群文件: 群ID={group_id}, 文件={filename}")
+            else:  # 私聊场景
+                client = event.bot
+                await client.upload_private_file(
+                    user_id=int(sender_qq),
+                    file=model_3d_path,
+                    name=filename
+                )
+                logger.info(f"3D模型已上传到个人文件: 用户QQ={sender_qq}, 文件={filename}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"上传3D模型文件失败: {e}")
+            return False
+
     async def _upload_zip_file(self, event: AstrMessageEvent, zip_path: str) -> bool:
         """上传压缩包到群文件或个人文件"""
         try:
@@ -4170,8 +4810,80 @@ class ModComfyUI(Star):
                 ))
                 return
 
-            # 解析参数
-            args = words[1:] if len(words) > 1 else []
+            # 改进的参数解析：使用正则表达式正确处理包含空格、引号、标点的参数值
+            import re
+            # 使用从后往前扫描的方法解析参数，基于已知参数名
+            # 逻辑：从后往前找冒号，检查前面是否有已知参数名，有则分割
+            
+            # 提取前缀后的参数部分
+            params_text = full_text[len(prefix):].strip()
+            
+            # 获取所有已知的参数名（包括别名）
+            known_keys = set()
+            node_configs = config.get("node_configs", {})
+            for node_id, node_config in node_configs.items():
+                for param_name, param_info in node_config.items():
+                    # 主参数名
+                    known_keys.add(param_name)
+                    # 别名
+                    aliases = param_info.get("aliases", [])
+                    known_keys.update(aliases)
+            
+            # 改进的参数解析：使用正则表达式正确处理包含空格、引号、标点的参数值
+            import re
+            
+            # 构建参数名的正则表达式模式，确保匹配完整的参数名
+            param_pattern = '|'.join(re.escape(key) for key in known_keys)
+            # 使用正向预查确保参数名后面是冒号，并且前面是单词边界或空格
+            regex_pattern = rf'(?<!\S)({param_pattern})(?=\s*:)'
+            
+            # 找到所有参数名的位置
+            matches = list(re.finditer(regex_pattern, params_text))
+            
+            args = []
+            prompt_parts = []
+            last_end = 0
+            
+            for match in matches:
+                param_name = match.group(1)
+                param_start = match.start()
+                
+                # 添加参数名之前的文本作为提示词的一部分
+                if param_start > last_end:
+                    prompt_part = params_text[last_end:param_start].strip()
+                    if prompt_part:
+                        prompt_parts.append(prompt_part)
+                
+                # 找到冒号位置
+                colon_pos = params_text.find(':', param_start)
+                if colon_pos == -1:
+                    continue
+                
+                # 找到参数值的结束位置（下一个参数名之前或字符串结尾）
+                next_param_start = len(params_text)
+                for next_match in matches[matches.index(match) + 1:]:
+                    next_param_start = next_match.start()
+                    break
+                
+                # 提取参数值
+                param_value = params_text[colon_pos + 1:next_param_start].strip()
+                args.append(f"{param_name}:{param_value}")
+                
+                last_end = next_param_start
+            
+            # 添加最后的文本作为提示词
+            if last_end < len(params_text):
+                prompt_part = params_text[last_end:].strip()
+                if prompt_part:
+                    prompt_parts.append(prompt_part)
+            
+            # 合并所有提示词部分
+            prompt_text = ' '.join(prompt_parts).strip()
+            
+            # 如果有提示词参数，将其添加到参数列表中
+            if prompt_text:
+                args.insert(0, f"提示词:{prompt_text}")
+            
             params = self._parse_workflow_params(args, config)
 
             # 验证必需的参数
