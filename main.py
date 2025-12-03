@@ -1,4 +1,4 @@
-from astrbot.api.message_components import Plain, Image, Reply
+from astrbot.api.message_components import Plain, Image, Reply, Video
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api.event.filter import CustomFilter
@@ -234,6 +234,9 @@ class ModComfyUI(Star):
         # 调试信息
         logger.info(f"主动撤回配置: 启用={self.enable_auto_recall}, 延迟={self.auto_recall_delay}秒")
 
+        # 视频发送配置
+        self.max_upload_size = config.get("max_upload_size", 100)  # 最大直接发送视频大小（MB）
+
         # GUI配置管理界面配置
         self.enable_gui = config.get("enable_gui", False)
         self.gui_port = config.get("gui_port", 7777)
@@ -260,6 +263,11 @@ class ModComfyUI(Star):
         self.config_dir = Path(__file__).parent
         self.workflow_dir = self.config_dir / "workflow"
         self.main_config_file = self.config_dir / "config.json"
+        
+        # 群聊白名单配置
+        self.group_whitelist = config.get("group_whitelist", [])
+        # 转换为字符串列表，确保比较时类型一致
+        self.group_whitelist = [str(group_id) for group_id in self.group_whitelist]
         
         # 如果启用GUI，则初始化Flask应用
         if self.enable_gui:
@@ -724,6 +732,27 @@ class ModComfyUI(Star):
             if url_without_prefix in filtered_text and server.url not in filtered_text:
                 filtered_text = filtered_text.replace(url_without_prefix, f"[{server.name}地址已隐藏]")
         return filtered_text
+    
+    def _check_group_whitelist(self, event: AstrMessageEvent) -> bool:
+        """检查群聊是否在白名单中"""
+        # 如果白名单为空，则允许所有群聊
+        if not self.group_whitelist:
+            return True
+        
+        # 获取群组ID
+        group_id = event.get_group_id()
+        if group_id is None:
+            # 私聊消息，默认允许
+            return True
+        
+        # 检查群组是否在白名单中
+        group_id_str = str(group_id)
+        is_allowed = group_id_str in self.group_whitelist
+        
+        if not is_allowed:
+            logger.info(f"群聊 {group_id} 不在白名单中，拒绝访问")
+        
+        return is_allowed
 
     def _parse_lora_config(self) -> Dict[str, Tuple[str, str]]:
         lora_map = {}
@@ -2625,22 +2654,24 @@ class ModComfyUI(Star):
             merged_chain.append(Plain(f"\n\n第{idx}/{len(image_urls) + len(video_files) + len(audio_files) + len(model_3d_files)}张图片："))
             merged_chain.append(Image.fromURL(img_url))
         
-        # 添加视频（作为文件上传）
+        # 添加视频（根据大小决定发送方式）
         if video_files:
             for idx, video_info in enumerate(video_files):
                 video_idx = len(image_urls) + idx + 1
-                merged_chain.append(Plain(f"\n\n第{video_idx}/{len(image_urls) + len(video_files) + len(audio_files) + len(model_3d_files)}个视频：正在上传文件..."))
+                filename = video_info["filename"]
                 
-                # 下载并上传视频文件
+                # 下载视频文件
                 try:
-                    video_path = await self._download_and_upload_video(event, server, video_info)
-                    if video_path:
-                        merged_chain.append(Plain(f"\n✅ 视频{video_idx}已上传为文件"))
+                    temp_video_path = await self._download_video_file(event, server, video_info)
+                    if temp_video_path:
+                        # 使用新的发送逻辑（小于100MB直接发送，大于100MB上传为群文件）
+                        await self._send_video(event, temp_video_path, filename, video_idx)
+                        merged_chain.append(Plain(f"\n✅ 视频{video_idx}处理完成"))
                     else:
-                        merged_chain.append(Plain(f"\n❌ 视频{video_idx}上传失败"))
+                        merged_chain.append(Plain(f"\n❌ 视频{video_idx}下载失败"))
                 except Exception as e:
-                    logger.error(f"视频上传失败: {e}")
-                    merged_chain.append(Plain(f"\n❌ 视频{video_idx}上传失败: {str(e)}"))
+                    logger.error(f"视频处理失败: {e}")
+                    merged_chain.append(Plain(f"\n❌ 视频{video_idx}处理失败: {str(e)}"))
         
         # 添加音频（作为文件上传）
         if audio_files:
@@ -2962,6 +2993,13 @@ class ModComfyUI(Star):
     # 文生图指令
     @filter.custom_filter(ImgGenerateFilter)
     async def generate_image(self, event: AstrMessageEvent) -> None:
+        # 检查群聊白名单
+        if not self._check_group_whitelist(event):
+            await self._send_with_auto_recall(event, event.plain_result(
+                "❌ 当前群聊不在白名单中，无法使用此功能！"
+            ))
+            return
+        
         if not self._is_in_open_time():
             open_desc = self._get_open_time_desc()
             await self._send_with_auto_recall(event, event.plain_result(
@@ -3832,6 +3870,13 @@ class ModComfyUI(Star):
     @filter.custom_filter(HelpFilter)
     async def send_help(self, event: AstrMessageEvent) -> None:
         """发送帮助信息"""
+        # 检查群聊白名单
+        if not self._check_group_whitelist(event):
+            await self._send_with_auto_recall(event, event.plain_result(
+                "❌ 当前群聊不在白名单中，无法使用此功能！"
+            ))
+            return
+        
         if self.enable_help_image:
             await self._send_help_as_image(event)
         else:
@@ -3915,8 +3960,8 @@ class ModComfyUI(Star):
             logger.error(f"创建压缩包失败: {e}")
             return None
 
-    async def _download_and_upload_video(self, event: AstrMessageEvent, server: ServerState, video_info: Dict[str, Any]) -> Optional[str]:
-        """下载视频文件并上传到QQ群文件或个人文件"""
+    async def _download_video_file(self, event: AstrMessageEvent, server: ServerState, video_info: Dict[str, Any]) -> Optional[str]:
+        """下载视频文件到临时目录"""
         try:
             # 获取视频URL
             video_url = video_info["url"]
@@ -3963,58 +4008,76 @@ class ModComfyUI(Star):
                 except Exception as e:
                     logger.warning(f"视频自动保存失败: {e}")
             
-            # 上传视频文件到QQ
-            upload_success = await self._upload_video_file(event, str(temp_video_path), filename)
+            # 创建清理任务
+            asyncio.create_task(self._cleanup_temp_video_file(temp_video_path))
             
-            # 清理临时文件
-            try:
-                await asyncio.sleep(2)  # 等待上传完成
-                def remove_temp_file():
-                    if temp_video_path.exists():
-                        temp_video_path.unlink()
-                await loop.run_in_executor(None, remove_temp_file)
-                logger.info(f"临时视频文件已清理: {temp_video_path}")
-            except Exception as e:
-                logger.warning(f"清理临时视频文件失败: {e}")
-            
-            return str(temp_video_path) if upload_success else None
+            return str(temp_video_path)
             
         except Exception as e:
-            logger.error(f"下载并上传视频失败: {e}")
+            logger.error(f"下载视频失败: {e}")
             return None
 
-    async def _upload_video_file(self, event: AstrMessageEvent, video_path: str, filename: str) -> bool:
-        """上传视频文件到群文件或个人文件"""
+    async def _cleanup_temp_video_file(self, temp_video_path) -> None:
+        """延迟清理临时视频文件"""
         try:
-            # 检查是否为QQ平台
-            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-            if not isinstance(event, AiocqhttpMessageEvent):
-                logger.info("非QQ平台不支持文件上传功能")
-                return False
-            
-            # 获取群ID和发送者QQ号
-            group_id = event.get_group_id()
-            sender_qq = event.get_sender_id()
-            
-            if group_id:  # 群聊场景
-                client = event.bot
-                await client.upload_group_file(
-                    group_id=group_id,
-                    file=video_path,
-                    name=filename
-                )
-                logger.info(f"视频已上传到群文件: 群ID={group_id}, 文件={filename}")
-            else:  # 私聊场景
-                client = event.bot
-                await client.upload_private_file(
-                    user_id=int(sender_qq),
-                    file=video_path,
-                    name=filename
-                )
-                logger.info(f"视频已上传到个人文件: 用户QQ={sender_qq}, 文件={filename}")
-            
-            return True
+            await asyncio.sleep(10)  # 等待10秒后清理
+            if temp_video_path.exists():
+                temp_video_path.unlink()
+                logger.info(f"临时视频文件已清理: {temp_video_path}")
         except Exception as e:
+            logger.warning(f"清理临时视频文件失败: {e}")
+
+
+
+    async def _send_video(self, event: AstrMessageEvent, video_path: str, filename: str, video_idx: int) -> None:
+        """发送视频（小于100MB直接发送，大于100MB上传为群文件）"""
+        try:
+            # 获取文件大小
+            file_size_bytes = os.path.getsize(video_path)
+            file_size_mb = file_size_bytes / (1024 * 1024)
+            
+            # Windows路径兼容处理
+            video_path_compat = os.path.abspath(video_path).replace("\\", "/")
+            
+            # 校验文件读取权限
+            if not os.access(video_path, os.R_OK):
+                raise PermissionError(f"程序无读取权限，请检查文件权限设置")
+            
+            # 简单校验MP4文件有效性
+            with open(video_path, "rb") as f:
+                file_header = f.read(4)
+            if file_header not in (b'\x00\x00\x00\x18', b'\x00\x00\x00\x1C', b'ftyp'):
+                logger.warning(f"⚠️  检测到非标准MP4文件头：{file_header.hex()}，可能无法正常发送")
+            
+            if file_size_mb > self.max_upload_size:
+                # 大于100MB，上传为群文件
+                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+                if isinstance(event, AiocqhttpMessageEvent):
+                    client = event.bot
+                    group_id = event.get_group_id()
+                    
+                    if group_id:
+                        await client.upload_group_file(group_id=group_id, file=video_path_compat, name=filename)
+                        logger.info(f"视频{video_idx}（{file_size_mb:.1f}MB）超过{self.max_upload_size}MB，已上传为群文件：{filename}")
+                    else:
+                        sender_qq = event.get_sender_id()
+                        await client.upload_private_file(user_id=int(sender_qq), file=video_path_compat, name=filename)
+                        logger.info(f"视频{video_idx}（{file_size_mb:.1f}MB）超过{self.max_upload_size}MB，已上传为私聊文件：{filename}")
+                else:
+                    logger.warning("非QQ平台，不支持文件上传")
+            else:
+                # 小于100MB，直接发送视频
+                await event.send(event.chain_result([Video.fromFileSystem(video_path_compat)]))
+                logger.info(f"视频{video_idx}（{file_size_mb:.1f}MB）直接发送成功！")
+                
+        except PermissionError as e:
+            logger.error(f"❌ 视频发送失败: {str(e)}")
+        except FileNotFoundError as e:
+            logger.error(f"❌ 视频发送失败: {str(e)}")
+        except Exception as e:
+            logger.error(f"❌ 视频{video_idx}发送失败: {str(e)}")
+
+
             logger.error(f"上传视频文件失败: {e}")
             return False
 
@@ -4278,6 +4341,13 @@ class ModComfyUI(Star):
     async def handle_output_zip(self, event: AstrMessageEvent) -> None:
         """处理输出压缩包指令"""
         try:
+            # 检查群聊白名单
+            if not self._check_group_whitelist(event):
+                await self._send_with_auto_recall(event, event.plain_result(
+                    "❌ 当前群聊不在白名单中，无法使用此功能！"
+                ))
+                return
+            
             # 检查是否开启了自动保存功能
             if not self.enable_auto_save:
                 await self._send_with_auto_recall(event, event.plain_result(
@@ -4463,6 +4533,13 @@ class ModComfyUI(Star):
     # 图生图指令
     @filter.custom_filter(Img2ImgFilter)
     async def handle_img2img(self, event: AstrMessageEvent) -> None:
+        # 检查群聊白名单
+        if not self._check_group_whitelist(event):
+            await self._send_with_auto_recall(event, event.plain_result(
+                "❌ 当前群聊不在白名单中，无法使用此功能！"
+            ))
+            return
+        
         if not self._is_in_open_time():
             open_desc = self._get_open_time_desc()
             await self._send_with_auto_recall(event, event.plain_result(
@@ -4795,6 +4872,13 @@ class ModComfyUI(Star):
             config = workflow_info["config"]
             workflow_data = workflow_info["workflow"]
 
+            # 检查群聊白名单
+            if not self._check_group_whitelist(event):
+                await self._send_with_auto_recall(event, event.plain_result(
+                    "❌ 当前群聊不在白名单中，无法使用此功能！"
+                ))
+                return
+            
             # 检查开放时间
             if not self._is_in_open_time():
                 await self._send_with_auto_recall(event, event.plain_result(
