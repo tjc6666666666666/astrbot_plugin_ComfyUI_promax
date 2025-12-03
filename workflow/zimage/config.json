@@ -1,0 +1,79 @@
+{
+  "name": "千问z-image",
+  "prefix": "千问",
+  "description": "",
+  "version": "1.0.0",
+  "author": "ComfyUI Plugin",
+  "input_nodes": [],
+  "output_nodes": [
+    "9"
+  ],
+  "configurable_nodes": [
+    "34:13",
+    "34:27",
+    "39",
+    "34:3"
+  ],
+  "input_mappings": {},
+  "output_mappings": {
+    "9": {
+      "parameter_name": "images",
+      "type": "image",
+      "description": "处理后的图像"
+    }
+  },
+  "node_configs": {
+    "39": {
+      "enable": {
+        "type": "boolean",
+        "default": true,
+        "description": "",
+        "required": false,
+        "aliases": [
+          "加密"
+        ]
+      }
+    },
+    "34:13": {
+      "width": {
+        "type": "number",
+        "default": 2048,
+        "description": "",
+        "required": false,
+        "max": 3000,
+        "aliases": [
+          "宽"
+        ]
+      },
+      "height": {
+        "type": "number",
+        "default": 2048,
+        "description": "",
+        "required": false,
+        "max": 3000,
+        "aliases": [
+          "高"
+        ]
+      }
+    },
+    "34:27": {
+      "text": {
+        "type": "text",
+        "default": "A magazine cover photography of a smiling energetic 16-year-old Japanese girl with layered short hair, pushing a vintage bicycle in front of a retro mint green vending machine. Cheerful expression, lively posture, summer vibe. She wears a white T-shirt and denim overalls. Green grapes and a water cup in the bike basket. Background of messy telephone poles and nostalgic Japanese shop signs. Side sunlight creating a golden halo on her hair. Fujifilm Pro 400H style, grainy film texture, low saturation, slightly overexposed, cinematic composition, unique camera angle. Fashion editorial style, 8K resolution.Magazine cover layout with visible text:Large title “SUMMER” at the top.Small cover text: “Youth & Freedom”, “Tokyo Street Issue”, “Vol. 24 | August 2025”.Barcode at the bottom corner.",
+        "description": "",
+        "required": true,
+        "aliases": [
+          "提示词"
+        ]
+      }
+    },
+    "34:3": {
+      "seed": {
+        "type": "number",
+        "default": -1,
+        "description": "",
+        "required": false
+      }
+    }
+  }
+}

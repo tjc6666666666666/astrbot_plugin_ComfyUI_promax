@@ -1,0 +1,77 @@
+{
+  "name": "Wan2.2",
+  "prefix": "wan2.2",
+  "description": "",
+  "version": "1.0.0",
+  "author": "ComfyUI Plugin",
+  "input_nodes": [
+    "97"
+  ],
+  "output_nodes": [
+    "108"
+  ],
+  "configurable_nodes": [
+    "116:98",
+    "116:93",
+    "116:117"
+  ],
+  "input_mappings": {
+    "97": {
+      "parameter_name": "image",
+      "type": "image",
+      "description": "输入的原始图像"
+    }
+  },
+  "output_mappings": {
+    "108": {
+      "parameter_name": "images",
+      "type": "image",
+      "description": "处理后的图像"
+    }
+  },
+  "node_configs": {
+    "116:98": {
+      "length": {
+        "type": "number",
+        "default": 81,
+        "description": "",
+        "required": false,
+        "max": 150,
+        "aliases": [
+          "总帧数"
+        ]
+      }
+    },
+    "116:93": {
+      "text": {
+        "type": "text",
+        "default": "A felt-style little eagle cashier greeting, waving, and smiling at the camera.",
+        "description": "",
+        "required": true,
+        "aliases": [
+          "提示词"
+        ]
+      }
+    },
+    "116:117": {
+      "max_width": {
+        "type": "number",
+        "default": 1024,
+        "description": "",
+        "required": false,
+        "aliases": [
+          "最宽"
+        ]
+      },
+      "max_height": {
+        "type": "number",
+        "default": 1280,
+        "description": "",
+        "required": false,
+        "aliases": [
+          "最高"
+        ]
+      }
+    }
+  }
+}

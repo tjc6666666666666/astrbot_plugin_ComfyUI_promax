@@ -1,0 +1,64 @@
+{
+  "name": "Hunyuan3D",
+  "prefix": "hunyuan3D",
+  "description": "",
+  "version": "1.0.0",
+  "author": "ComfyUI Plugin",
+  "input_nodes": [
+    "2"
+  ],
+  "output_nodes": [
+    "10"
+  ],
+  "configurable_nodes": [
+    "19:4",
+    "19:8"
+  ],
+  "input_mappings": {
+    "2": {
+      "parameter_name": "image",
+      "type": "image",
+      "description": "输入的原始图像"
+    }
+  },
+  "output_mappings": {
+    "10": {
+      "parameter_name": "images",
+      "type": "image",
+      "description": "处理后的图像"
+    }
+  },
+  "node_configs": {
+    "19:4": {
+      "resolution": {
+        "type": "number",
+        "default": 3072,
+        "description": "分辨率",
+        "required": false,
+        "aliases": [
+          "分辨率"
+        ]
+      }
+    },
+    "19:8": {
+      "num_chunks": {
+        "type": "number",
+        "default": 8000,
+        "description": "块数",
+        "required": false,
+        "aliases": [
+          "块数"
+        ]
+      },
+      "octree_resolution": {
+        "type": "number",
+        "default": 256,
+        "description": "八叉树分辨率",
+        "required": false,
+        "aliases": [
+          "八叉树分辨率"
+        ]
+      }
+    }
+  }
+}

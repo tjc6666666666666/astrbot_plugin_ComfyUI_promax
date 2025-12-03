@@ -1,0 +1,62 @@
+{
+  "name": "Wan2.2",
+  "prefix": "wan2.2首尾帧",
+  "description": "",
+  "version": "1.0.0",
+  "author": "ComfyUI Plugin",
+  "input_nodes": [
+    "62",
+    "68"
+  ],
+  "output_nodes": [
+    "61"
+  ],
+  "configurable_nodes": [
+    "67",
+    "6"
+  ],
+  "input_mappings": {
+    "62": {
+      "parameter_name": "image",
+      "type": "image",
+      "description": "输入的原始图像"
+    },
+    "68": {
+      "parameter_name": "image",
+      "type": "image",
+      "description": "输入的原始图像"
+    }
+  },
+  "output_mappings": {
+    "61": {
+      "parameter_name": "images",
+      "type": "image",
+      "description": "处理后的图像"
+    }
+  },
+  "node_configs": {
+    "6": {
+      "text": {
+        "type": "text",
+        "default": "A bearded man with red facial hair wearing a yellow straw hat and dark coat in Van Gogh's self-portrait style, slowly and continuously transforms into a space astronaut. The transformation flows like liquid paint - his beard fades away strand by strand, the yellow hat melts and reforms smoothly into a silver space helmet, dark coat gradually lightens and restructures into a white spacesuit. The background swirling brushstrokes slowly organize and clarify into realistic stars and space, with Earth appearing gradually in the distance. Every change happens in seamless waves, maintaining visual continuity throughout the metamorphosis.Consistent soft lighting throughout, medium close-up maintaining same framing, central composition stays fixed, gentle color temperature shift from warm to cool, gradual contrast increase, smooth style transition from painterly to photorealistic. Static camera with subtle slow zoom, emphasizing the flowing transformation process without abrupt changes.",
+        "description": "",
+        "required": true,
+        "aliases": [
+          "提示词"
+        ]
+      }
+    },
+    "67": {
+      "length": {
+        "type": "number",
+        "default": 81,
+        "description": "",
+        "required": false,
+        "max": 150,
+        "aliases": [
+          "总帧数"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,163 @@
+{
+  "2": {
+    "inputs": {
+      "image": "1764472870_b3301162.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "10": {
+    "inputs": {
+      "filename_prefix": "mesh/ComfyUI",
+      "image": "",
+      "mesh": [
+        "19:9",
+        0
+      ]
+    },
+    "class_type": "SaveGLB",
+    "_meta": {
+      "title": "SaveGLB"
+    }
+  },
+  "29": {
+    "inputs": {
+      "aspect_ratio_width": 1,
+      "aspect_ratio_height": 1,
+      "fill_color": "#ffffff",
+      "image": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "ImageAspectRatioFiller",
+    "_meta": {
+      "title": "图像比例填充器（补白）"
+    }
+  },
+  "19:7": {
+    "inputs": {
+      "seed": 964054967321774,
+      "steps": 30,
+      "cfg": 5,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 1,
+      "model": [
+        "19:3",
+        0
+      ],
+      "positive": [
+        "19:6",
+        0
+      ],
+      "negative": [
+        "19:6",
+        1
+      ],
+      "latent_image": [
+        "19:4",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "19:13": {
+    "inputs": {
+      "crop": "center",
+      "clip_vision": [
+        "19:1",
+        1
+      ],
+      "image": [
+        "29",
+        0
+      ]
+    },
+    "class_type": "CLIPVisionEncode",
+    "_meta": {
+      "title": "CLIP视觉编码"
+    }
+  },
+  "19:6": {
+    "inputs": {
+      "clip_vision_output": [
+        "19:13",
+        0
+      ]
+    },
+    "class_type": "Hunyuan3Dv2Conditioning",
+    "_meta": {
+      "title": "Hunyuan3Dv2Conditioning"
+    }
+  },
+  "19:4": {
+    "inputs": {
+      "resolution": 3072,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentHunyuan3Dv2",
+    "_meta": {
+      "title": "EmptyLatentHunyuan3Dv2"
+    }
+  },
+  "19:9": {
+    "inputs": {
+      "algorithm": "surface net",
+      "threshold": 0.6,
+      "voxel": [
+        "19:8",
+        0
+      ]
+    },
+    "class_type": "VoxelToMesh",
+    "_meta": {
+      "title": "VoxelToMesh"
+    }
+  },
+  "19:8": {
+    "inputs": {
+      "num_chunks": 8000,
+      "octree_resolution": 256,
+      "samples": [
+        "19:7",
+        0
+      ],
+      "vae": [
+        "19:1",
+        2
+      ]
+    },
+    "class_type": "VAEDecodeHunyuan3D",
+    "_meta": {
+      "title": "VAEDecodeHunyuan3D"
+    }
+  },
+  "19:1": {
+    "inputs": {
+      "ckpt_name": "hunyuan3d-dit-v2.safetensors"
+    },
+    "class_type": "ImageOnlyCheckpointLoader",
+    "_meta": {
+      "title": "Checkpoint加载器（仅图像）"
+    }
+  },
+  "19:3": {
+    "inputs": {
+      "shift": 1,
+      "model": [
+        "19:1",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "采样算法（AuraFlow）"
+    }
+  }
+}
