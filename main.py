@@ -82,6 +82,11 @@ class ModComfyUI(Star):
             starts_with_img2img = (full_text.startswith("img2img") or full_text.startswith("img2img ")) and full_text != "img2img"
             return starts_with_img2img and (has_image or has_image_in_reply)
 
+    class TomatoDecryptFilter(CustomFilter):
+        def filter(self, event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
+            full_text = event.message_obj.message_str.strip()
+            return full_text == "小番茄图片解密"
+
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         # 1. 加载配置
@@ -3425,6 +3430,7 @@ class ModComfyUI(Star):
                 f"• 文生图: 发送「aimg <提示词> [宽X,高Y] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]」参数可选，非必填",
                 f"• 图生图: 发送「img2img <提示词> [噪声:数值] [批量N] [model:描述] [lora:描述[:强度][!CLIP强度]]」+ 图片或引用包含图片的消息",
                 f"• 输出压缩包: comfyuioutput",
+                f"• 小番茄解密：发送「小番茄图片解密」",
                 f"• 帮助信息: 单独输入 aimg 或 img2img"
             ]))
             
@@ -3841,6 +3847,7 @@ class ModComfyUI(Star):
   例：img2img 猫咪 噪声:0.7 批量2 model:动漫风格 lora:动物:1.2!0.9 + 图片/引用图片消息
 
 • 输出压缩包：发送「comfyuioutput」获取今天生成的图片压缩包（需开启自动保存）
+• 小番茄解密：发送「小番茄图片解密」获取图片解密工具（支持批量解密小番茄混淆加密的图片）
 
 • 自定义Workflow：发送「<前缀> [参数名:值 ...]」+ 图片（如需要），支持中英文参数名
   例：encrypt 模式:decrypt 或 t2l 提示词:可爱女孩 种子:123 采样器:euler
@@ -4343,6 +4350,43 @@ class ModComfyUI(Star):
             logger.error(f"上传压缩包失败: {e}")
             return False
 
+    async def _upload_html_file(self, event: AstrMessageEvent, html_path: str) -> bool:
+        """上传HTML文件到群文件或个人文件"""
+        try:
+            # 检查是否为QQ平台
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+            if not isinstance(event, AiocqhttpMessageEvent):
+                logger.info("非QQ平台不支持文件上传功能")
+                return False
+            
+            # 获取群ID和发送者QQ号
+            group_id = event.get_group_id()
+            sender_qq = event.get_sender_id()
+            
+            html_filename = os.path.basename(html_path)
+            
+            if group_id:  # 群聊场景
+                client = event.bot
+                await client.upload_group_file(
+                    group_id=group_id,
+                    file=html_path,
+                    name=html_filename
+                )
+                logger.info(f"HTML文件已上传到群文件: 群ID={group_id}, 文件={html_filename}")
+            else:  # 私聊场景
+                client = event.bot
+                await client.upload_private_file(
+                    user_id=int(sender_qq),
+                    file=html_path,
+                    name=html_filename
+                )
+                logger.info(f"HTML文件已上传到个人文件: 用户QQ={sender_qq}, 文件={html_filename}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"上传HTML文件失败: {e}")
+            return False
+
     # 添加输出压缩包过滤器
     class OutputZipFilter(CustomFilter):
         def filter(self, event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
@@ -4469,6 +4513,61 @@ class ModComfyUI(Star):
             await self._send_with_auto_recall(event, event.plain_result(
                 "❌ 处理请求时发生错误，请稍后重试！"
             ))
+
+    @filter.custom_filter(TomatoDecryptFilter)
+    async def handle_tomato_decrypt(self, event: AstrMessageEvent) -> None:
+        """处理小番茄图片解密指令"""
+        try:
+            # 检查群聊白名单
+            if not self._check_group_whitelist(event):
+                await self._send_with_auto_recall(event, event.plain_result(
+                    "❌ 当前群聊不在白名单中，无法使用此功能！"
+                ))
+                return
+            
+            # 获取HTML文件路径
+            html_file_path = os.path.join(os.path.dirname(__file__), "解密.html")
+            
+            # 检查HTML文件是否存在
+            if not os.path.exists(html_file_path):
+                await self._send_with_auto_recall(event, event.plain_result(
+                    "❌ 解密工具文件不存在！请联系管理员检查文件。"
+                ))
+                return
+            
+            await self._send_with_auto_recall(event, event.plain_result("🔧 正在发送小番茄图片解密工具..."))
+            
+            # 上传HTML文件
+            upload_success = await self._upload_html_file(event, html_file_path)
+            
+            if upload_success:
+                await self._send_with_auto_recall(event, event.plain_result(
+                    "✅ 小番茄图片解密工具发送成功！\n"
+                    f"📁 文件名: 解密.html\n"
+                    "💡 使用说明:\n"
+                    "  1. 从群文件或私聊文件中下载解密.html\n"
+                    "  2. 用浏览器打开该HTML文件\n"
+                    "  3. 选择需要解密的图片文件\n"
+                    "  4. 点击解密按钮即可还原图片\n"
+                    "  5. 支持批量解密和自动下载"
+                ))
+            else:
+                # 检查是否为平台不支持
+                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+                if not isinstance(event, AiocqhttpMessageEvent):
+                    await self._send_with_auto_recall(event, event.plain_result(
+                        "❌ 当前平台不支持文件上传功能！\n"
+                        "📱 文件上传仅支持QQ平台\n"
+                        "💡 如需获取解密工具，请使用QQ平台发送此指令"
+                    ))
+                else:
+                    await self._send_with_auto_recall(event, event.plain_result(
+                        "❌ 解密工具发送失败，请稍后重试！"
+                    ))
+                
+        except Exception as e:
+            logger.error(f"处理小番茄图片解密指令失败: {e}")
+            await self._send_with_auto_recall(event, event.plain_result(f"❌ 处理请求失败: {str(e)}"))
 
     async def cleanup_temp_files(self) -> None:
         """清理临时文件"""
