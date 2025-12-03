@@ -286,5 +286,14 @@
         "type": "bool",
         "default": true,
         "hint": "控制Web API是否通过代理提供图片访问，避免暴露127.0.0.1地址，true=启用代理，false=直接返回ComfyUI地址"
+    },
+    "group_whitelist": {
+        "description": "群聊白名单",
+        "type": "list",
+        "default": [],
+        "hint": "允许使用插件的群聊QQ号列表，空列表表示允许所有群聊。格式：[\"群号1\", \"群号2\", ...]",
+        "items": {
+            "type": "string"
+        }
     }
 }
