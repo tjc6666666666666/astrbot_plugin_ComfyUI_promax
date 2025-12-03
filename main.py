@@ -1761,11 +1761,6 @@ class ModComfyUI(Star):
                 "class_type": "VAEDecode",
                 "_meta": {"title": "VAE Decode"}
             },
-            "9": {
-                "inputs": {"filename_prefix": "comfyui_gen", "images": ["44", 0]},
-                "class_type": "SaveImage",
-                "_meta": {"title": "Save Image"}
-            },
             "30": {
                 "inputs": {"ckpt_name": selected_model or self.ckpt_name},
                 "class_type": "CheckpointLoaderSimple",
@@ -1791,18 +1786,39 @@ class ModComfyUI(Star):
                 "inputs": {"text": self.negative_prompt, "clip": ["30", 1]},
                 "class_type": "CLIPTextEncode",
                 "_meta": {"title": "CLIP Text Encode (Negative Prompt)"}
-            },
-            "44": {
-                "inputs": {"mode": "encrypt", "enable": self.enable_image_encrypt, "image": ["8", 0]},
+            }
+        }
+        
+        # 根据配置决定是否添加图片混淆节点
+        if self.enable_image_encrypt:
+            # 启用图片混淆时的节点配置
+            nodes["44"] = {
+                "inputs": {"mode": "encrypt", "enable": True, "image": ["8", 0]},
                 "class_type": "HilbertImageEncrypt",
                 "_meta": {"title": "希尔伯特曲线图像加密"}
-            },
-            "save_image_websocket_node": {
+            }
+            nodes["save_image_websocket_node"] = {
                 "inputs": {"images": ["44", 0]},
                 "class_type": "SaveImageWebsocket",
                 "_meta": {"title": "保存图像（网络接口）"}
             }
-        }
+            nodes["9"] = {
+                "inputs": {"filename_prefix": "comfyui_gen", "images": ["44", 0]},
+                "class_type": "SaveImage",
+                "_meta": {"title": "Save Image"}
+            }
+        else:
+            # 未启用图片混淆时，直接连接VAE解码输出到保存节点
+            nodes["save_image_websocket_node"] = {
+                "inputs": {"images": ["8", 0]},
+                "class_type": "SaveImageWebsocket",
+                "_meta": {"title": "保存图像（网络接口）"}
+            }
+            nodes["9"] = {
+                "inputs": {"filename_prefix": "comfyui_gen", "images": ["8", 0]},
+                "class_type": "SaveImage",
+                "_meta": {"title": "Save Image"}
+            }
         if lora_list:
             current_model_node = "30"
             current_clip_node = "30"
