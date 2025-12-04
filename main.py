@@ -37,6 +37,9 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, f
 from functools import wraps
 import time
 
+# 伪造转发消息相关导入
+from astrbot.api.message_components import Node, Nodes
+
 
 @register(
     "mod-comfyui",
@@ -247,6 +250,11 @@ class ModComfyUI(Star):
         self.gui_port = config.get("gui_port", 7777)
         self.gui_username = config.get("gui_username", "123")
         self.gui_password = config.get("gui_password", "123")
+        
+        # 伪造转发消息配置
+        self.enable_fake_forward = config.get("enable_fake_forward", False)
+        self.fake_forward_threshold = config.get("fake_forward_threshold", 2)  # 图片数量阈值
+        self.fake_forward_qq = config.get("fake_forward_qq", "")  # 伪造的QQ号：0=发送者QQ，1=机器人QQ，其他=指定QQ号
         
         # Flask应用和GUI相关
         self.app = None
@@ -2492,9 +2500,9 @@ class ModComfyUI(Star):
             result_parts.append(f"{len(model_3d_files)}个3D模型")
         
         if image_filename:
-            result_text = f"提示词：{self._truncate_prompt(prompt)}\nSeed：{current_seed}\n噪声系数：{denoise}\n批量数：{current_batch_size}\n{task_type}生成完成！\n共{'、'.join(result_parts)}已合并为一条消息发送～"
+            result_text = f"提示词：{self._truncate_prompt(prompt)}\nSeed：{current_seed}\n噪声系数：{denoise}\n批量数：{current_batch_size}\n{task_type}生成完成！"
         else:
-            result_text = f"提示词：{self._truncate_prompt(prompt)}\nSeed：{current_seed}\n分辨率：{current_width}x{current_height}\n批量数：{current_batch_size}\n{task_type}生成完成！\n共{'、'.join(result_parts)}已合并为一条消息发送～"
+            result_text = f"提示词：{self._truncate_prompt(prompt)}\nSeed：{current_seed}\n分辨率：{current_width}x{current_height}\n批量数：{current_batch_size}\n{task_type}生成完成！"
         if lora_list:
             lora_result_info = "\n使用LoRA：" + " | ".join([
                 f"{lora['name']}（model:{lora['strength_model']}, clip:{lora['strength_clip']}）"
@@ -2529,8 +2537,8 @@ class ModComfyUI(Star):
                     logger.error(f"3D模型上传失败: {e}")
                     merged_chain.append(Plain(f"\n❌ 3D模型{model_3d_idx}上传失败: {str(e)}"))
         
-        # 一次性发送合并的消息
-        await event.send(event.chain_result(merged_chain))
+        # 使用伪造转发消息发送（如果启用且图片数量足够）
+        await self.send_fake_forward_message(event, merged_chain, len(image_urls))
 
     async def _process_workflow_task(
         self,
@@ -2728,8 +2736,8 @@ class ModComfyUI(Star):
                     logger.error(f"3D模型上传失败: {e}")
                     merged_chain.append(Plain(f"\n❌ 3D模型{model_3d_idx}上传失败: {str(e)}"))
         
-        # 一次性发送合并的消息
-        await event.send(event.chain_result(merged_chain))
+        # 使用伪造转发消息发送（如果启用且图片数量足够）
+        await self.send_fake_forward_message(event, merged_chain, len(image_urls))
 
     async def _send_comfyui_prompt(self, server: ServerState, comfy_prompt: Dict[str, Any]) -> str:
         url = f"{server.url}/prompt"
@@ -4603,6 +4611,101 @@ class ModComfyUI(Star):
                 
         except Exception as e:
             logger.error(f"清理临时文件时发生错误: {e}")
+
+    async def get_qq_nickname(self, qq_number):
+        """获取QQ昵称"""
+        # 如果没有配置QQ号或配置为空，返回默认昵称
+        if not qq_number or qq_number == "0" or qq_number == "":
+            return "Astrbot"
+            
+        url = f"http://api.mmp.cc/api/qqname?qq={qq_number}"
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status == 200:
+                        try:
+                            data = await response.json()
+                            logger.debug(f"QQ昵称API返回: {data}")
+                            
+                            # 根据实际API返回结构解析昵称
+                            if data.get("success") and "data" in data and "name" in data["data"]:
+                                nickname = data["data"]["name"]
+                                logger.debug(f"成功提取昵称: {nickname}")
+                                if nickname and nickname.strip():
+                                    return nickname.strip()
+                        except Exception as e:
+                            logger.debug(f"解析昵称出错: {str(e)}")
+        except Exception as e:
+            logger.debug(f"请求QQ昵称API出错: {str(e)}")
+        
+        # 如果API调用失败，返回默认昵称而不是"用户{qq_number}"
+        return "Astrbot"
+
+    async def send_fake_forward_message(self, event: AstrMessageEvent, merged_chain: List, image_count: int) -> None:
+        """发送伪造转发消息"""
+        if not self.enable_fake_forward or image_count < self.fake_forward_threshold:
+            # 如果未启用伪造转发或图片数量不足，使用普通发送方式
+            await event.send(event.chain_result(merged_chain))
+            return
+
+        try:
+            # 确定伪造的QQ号
+            fake_qq = self.fake_forward_qq
+            use_default = False  # 标记是否使用默认设置
+            
+            if not fake_qq or fake_qq == "":
+                # 如果没有配置或配置为空，使用默认设置
+                use_default = True
+                fake_qq = ""
+            elif fake_qq == "0":
+                # 使用发送用户的QQ号
+                fake_qq = str(event.get_sender_id())
+            elif fake_qq == "1":
+                # 使用自己的QQ号（机器人QQ号）
+                # 这里需要获取机器人自身的QQ号，暂时使用事件中的机器人ID
+                fake_qq = str(getattr(event.message_obj, 'self_id', '123456'))  # 如果获取不到则使用默认值
+
+            # 获取QQ昵称
+            if use_default:
+                nickname = "Astrbot"  # 默认昵称
+            else:
+                nickname = await self.get_qq_nickname(fake_qq)
+            
+            # 创建伪造节点
+            node_content = []
+            for component in merged_chain:
+                if isinstance(component, Plain):
+                    node_content.append(component)
+                elif isinstance(component, Image):
+                    node_content.append(component)
+            
+            # 创建Node，如果使用默认设置，使用机器人QQ号和默认头像
+            if use_default:
+                # 使用默认设置：昵称为Astrbot，QQ号为机器人ID
+                bot_qq = str(getattr(event.message_obj, 'self_id', '123456'))
+                node = Node(
+                    uin=int(bot_qq),
+                    name=nickname,
+                    content=node_content
+                )
+            else:
+                node = Node(
+                    uin=int(fake_qq) if fake_qq.isdigit() else 123456,
+                    name=nickname,
+                    content=node_content
+                )
+            
+            # 发送伪造转发消息
+            nodes = Nodes(nodes=[node])
+            await event.send(event.chain_result([nodes]))
+            
+            logger.info(f"已使用伪造转发消息发送，QQ号: {fake_qq}, 昵称: {nickname}, 图片数量: {image_count}")
+            
+        except Exception as e:
+            logger.error(f"发送伪造转发消息失败，使用普通发送方式: {str(e)}")
+            # 如果伪造转发失败，使用普通发送方式
+            await event.send(event.chain_result(merged_chain))
 
     async def terminate(self) -> None:
         """终止插件运行，清理所有资源（包括需要持续存在的GUI服务器）"""
