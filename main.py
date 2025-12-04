@@ -90,6 +90,11 @@ class ModComfyUI(Star):
             full_text = event.message_obj.message_str.strip()
             return full_text == "小番茄图片解密"
 
+    class TeeeFilter(CustomFilter):
+        def filter(self, event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
+            full_text = event.message_obj.message_str.strip()
+            return full_text == "teeee"
+
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         # 1. 加载配置
@@ -4577,6 +4582,303 @@ class ModComfyUI(Star):
             logger.error(f"处理小番茄图片解密指令失败: {e}")
             await self._send_with_auto_recall(event, event.plain_result(f"❌ 处理请求失败: {str(e)}"))
 
+    @filter.custom_filter(TeeeFilter)
+    async def handle_teee(self, event: AstrMessageEvent) -> None:
+        """处理teeee指令，获取并分析转发消息内容"""
+        try:
+            messages = event.get_messages()
+            
+            # 构建输出信息
+            output_lines = ["📋 转发消息元信息分析：\n"]
+            
+            # 获取基本信息 - 修复属性名获取问题
+            # 首先尝试从event对象直接获取
+            user_id = getattr(event, 'user_id', getattr(event.message_obj, 'sender_id', getattr(event.message_obj, 'user_id', 'Unknown')))
+            group_id = getattr(event, 'group_id', getattr(event.message_obj, 'group_id', None))
+            message_id = getattr(event.message_obj, 'message_id', getattr(event.message_obj, 'message_seq', 'Unknown'))
+            time_raw = getattr(event.message_obj, 'time', getattr(event.message_obj, 'timestamp', 'Unknown'))
+            
+            # 尝试从消息组件中获取更准确的信息（如果有Reply组件）
+            for msg in messages:
+                if hasattr(msg, 'sender_id') and msg.sender_id != 'Unknown':
+                    user_id = msg.sender_id
+                if hasattr(msg, 'time') and msg.time != 'Unknown':
+                    time_raw = msg.time
+                if hasattr(msg, 'qq') and msg.qq != 'Unknown':
+                    user_id = msg.qq
+            
+            # 格式化时间戳
+            if time_raw != 'Unknown' and isinstance(time_raw, (int, float)):
+                try:
+                    import time as time_module
+                    time_str = time_module.strftime('%Y-%m-%d %H:%M:%S', time_module.localtime(time_raw))
+                except:
+                    time_str = str(time_raw)
+            else:
+                time_str = str(time_raw) if time_raw != 'Unknown' else 'Unknown'
+            
+            output_lines.append(f"📤 发送者ID: {user_id}")
+            if group_id:
+                output_lines.append(f"👥 群聊ID: {group_id}")
+            output_lines.append(f"🆔 消息ID: {message_id}")
+            output_lines.append(f"⏰ 时间戳: {time_str}")
+            output_lines.append("")
+            
+            # 分析消息组件
+            output_lines.append(f"🔍 消息组件分析 (共{len(messages)}个组件)：")
+            
+            forward_content_found = False
+            
+            for i, msg in enumerate(messages, 1):
+                output_lines.append(f"\n--- 组件 {i} ---")
+                output_lines.append(f"📦 类型: {type(msg).__name__}")
+                output_lines.append(f"🏷️  模块名: {msg.__class__.__module__}")
+                
+                # 获取组件的所有属性
+                attributes = {}
+                for attr_name in dir(msg):
+                    if not attr_name.startswith('_'):
+                        try:
+                            attr_value = getattr(msg, attr_name)
+                            if not callable(attr_value):
+                                attributes[attr_name] = attr_value
+                        except Exception:
+                            continue
+                
+                # 打印所有属性
+                for attr_name, attr_value in attributes.items():
+                    # 对于可能很长的内容，进行截断处理
+                    if isinstance(attr_value, str) and len(attr_value) > 100:
+                        attr_value = attr_value[:100] + "..."
+                    elif isinstance(attr_value, (list, tuple)) and len(attr_value) > 5:
+                        attr_value = f"{type(attr_value).__name__}(长度:{len(attr_value)})"
+                    
+                    output_lines.append(f"  {attr_name}: {attr_value}")
+                
+                # 特殊处理Reply组件，尝试获取转发内容
+                if hasattr(msg, 'type') and hasattr(msg, 'chain') and msg.chain:
+                    output_lines.append(f"  📋 转发链长度: {len(msg.chain)}")
+                    
+                    for j, chain_msg in enumerate(msg.chain, 1):
+                        output_lines.append(f"    链节点{j}: {type(chain_msg).__name__}")
+                        
+                        # 如果是Forward组件，尝试获取转发消息内容
+                        if hasattr(chain_msg, 'type') and chain_msg.type.value == 'Forward':
+                            forward_content_found = True
+                            forward_id = getattr(chain_msg, 'id', None)
+                            
+                            if forward_id:
+                                output_lines.append(f"      📤 转发消息ID: {forward_id}")
+                                
+                                # 尝试获取转发消息内容
+                                try:
+                                    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+                                    if isinstance(event, AiocqhttpMessageEvent):
+                                        client = event.bot
+                                        
+                                        # 调用get_forward_msg API获取转发内容
+                                        forward_result = await client.api.call_action("get_forward_msg", message_id=forward_id)
+                                        logger.debug(f"转发消息API返回: {forward_result}")
+                                        
+                                        if forward_result:
+                                            # 检查不同的数据结构
+                                            forward_messages = None
+                                            if "messages" in forward_result:
+                                                forward_messages = forward_result["messages"]
+                                            elif "data" in forward_result and isinstance(forward_result["data"], dict) and "messages" in forward_result["data"]:
+                                                forward_messages = forward_result["data"]["messages"]
+                                            elif "data" in forward_result and isinstance(forward_result["data"], list):
+                                                forward_messages = forward_result["data"]
+                                            elif isinstance(forward_result, list):
+                                                forward_messages = forward_result
+                                            
+                                            if forward_messages:
+                                                output_lines.append(f"      📨 转发消息数量: {len(forward_messages)}")
+                                                output_lines.append("")
+                                                output_lines.append("🎯 转发消息内容详情：")
+                                                output_lines.append("=" * 60)
+                                                
+                                                for k, forward_msg in enumerate(forward_messages, 1):
+                                                    output_lines.append(f"\n【转发消息 {k}】")
+                                                    
+                                                    # 尝试多种方式获取发送者信息
+                                                    sender_name = "Unknown"
+                                                    sender_id = "Unknown"
+                                                    msg_time = "Unknown"
+                                                    
+                                                    # 标准字段
+                                                    if isinstance(forward_msg, dict):
+                                                        # 输出调试信息
+                                                        output_lines.append(f"🔍 调试: 消息字段 = {list(forward_msg.keys())}")
+                                                        
+                                                        # 获取发送者信息 - 支持多种格式
+                                                        sender_info = forward_msg.get('sender', {})
+                                                        if isinstance(sender_info, dict):
+                                                            # 调试：显示sender字段的所有内容
+                                                            output_lines.append(f"🔍 发送者字段详情: {sender_info}")
+                                                            sender_name = sender_info.get('nickname', sender_info.get('card', sender_info.get('name', 'Unknown')))
+                                                            sender_id = sender_info.get('user_id', sender_info.get('uid', 'Unknown'))
+                                                        else:
+                                                            # 调试：显示sender字段的类型和内容
+                                                            output_lines.append(f"🔍 发送者字段类型: {type(sender_info)}, 内容: {sender_info}")
+                                                            # 兜底：直接从顶级字段获取
+                                                            sender_name = forward_msg.get('sender_name', forward_msg.get('nickname', forward_msg.get('name', str(sender_info) if sender_info else 'Unknown')))
+                                                            sender_id = forward_msg.get('sender_id', forward_msg.get('user_id', 'Unknown'))
+                                                        
+                                                        msg_time = forward_msg.get('time', forward_msg.get('timestamp', 'Unknown'))
+                                                    
+                                                    output_lines.append(f"👤 发送者: {sender_name} ({sender_id})")
+                                                    
+                                                    # 格式化时间戳
+                                                    if msg_time != "Unknown" and isinstance(msg_time, (int, float)):
+                                                        try:
+                                                            import time as time_module
+                                                            formatted_time = time_module.strftime('%Y-%m-%d %H:%M:%S', time_module.localtime(msg_time))
+                                                            output_lines.append(f"⏰ 时间: {formatted_time}")
+                                                        except:
+                                                            output_lines.append(f"⏰ 时间戳: {msg_time}")
+                                                    else:
+                                                        output_lines.append(f"⏰ 时间: {msg_time}")
+                                                    
+                                                    # 解析消息内容
+                                                    msg_content = ""
+                                                    if isinstance(forward_msg, dict):
+                                                        msg_content = forward_msg.get('message', forward_msg.get('content', ''))
+                                                    
+                                                    if msg_content:
+                                                        output_lines.append("📝 内容:")
+                                                        
+                                                        # 如果是字符串，尝试解析CQ码
+                                                        if isinstance(msg_content, str):
+                                                            # 直接显示原始CQ码用于调试
+                                                            if len(msg_content) <= 200:
+                                                                output_lines.append(f"  🔧 原始CQ码: {msg_content}")
+                                                            else:
+                                                                output_lines.append(f"  🔧 原始CQ码: {msg_content[:200]}...[截断]")
+                                                            
+                                                            # 尝试解析CQ码
+                                                            try:
+                                                                from astrbot.api.message import Message
+                                                                parsed_message = Message(msg_content)
+                                                                plain_text = parsed_message.extract_plain_text()
+                                                                
+                                                                if plain_text.strip():
+                                                                    # 处理长文本，截断显示
+                                                                    if len(plain_text) > 500:
+                                                                        plain_text = plain_text[:500] + "...\n[文本过长，已截断]"
+                                                                    output_lines.append(f"  📄 文字: {plain_text}")
+                                                                
+                                                                # 检查其他类型的内容
+                                                                for segment in parsed_message:
+                                                                    if hasattr(segment, 'type'):
+                                                                        seg_type = getattr(segment.type, 'value', str(segment.type))
+                                                                        if seg_type == 'image':
+                                                                            output_lines.append(f"  🖼️  图片: [CQ图片]")
+                                                                        elif seg_type == 'video':
+                                                                            output_lines.append(f"  🎥 视频: [CQ视频]")
+                                                                        elif seg_type == 'record':
+                                                                            output_lines.append(f"  🎵 语音: [CQ语音]")
+                                                                        elif seg_type == 'face':
+                                                                            output_lines.append(f"  😊 表情: [CQ表情]")
+                                                                        elif seg_type == 'at':
+                                                                            output_lines.append(f"  👤 @提醒: [CQ@]")
+                                                                        elif seg_type not in ['text']:
+                                                                            output_lines.append(f"  📎 其他{seg_type}: [CQ{seg_type}]")
+                                                                
+                                                            except Exception as parse_error:
+                                                                logger.debug(f"解析CQ码失败: {parse_error}")
+                                                                output_lines.append(f"  ⚠️  CQ码解析失败: {str(parse_error)}")
+                                                                
+                                                        elif isinstance(msg_content, list):
+                                                            # 如果是列表格式，直接遍历
+                                                            output_lines.append(f"  📋 消息为列表格式，共{len(msg_content)}个元素:")
+                                                            for j, segment in enumerate(msg_content, 1):
+                                                                if isinstance(segment, dict):
+                                                                    seg_type = segment.get('type', 'unknown')
+                                                                    seg_data = segment.get('data', {})
+                                                                    output_lines.append(f"    元素{j}: {seg_type} - {seg_data}")
+                                                                
+                                                                    if seg_type == 'text':
+                                                                        text_content = seg_data.get('text', '')
+                                                                        if text_content and len(text_content) > 500:
+                                                                            text_content = text_content[:500] + "...[截断]"
+                                                                        output_lines.append(f"      📄 文字: {text_content}")
+                                                                    elif seg_type == 'image':
+                                                                        output_lines.append(f"      🖼️  图片: [CQ图片]")
+                                                                    elif seg_type == 'face':
+                                                                        output_lines.append(f"      😊 表情: {seg_data.get('id', 'unknown')}")
+                                                           
+                                                        else:
+                                                            output_lines.append(f"  📄 内容类型: {type(msg_content)}")
+                                                            if len(str(msg_content)) > 300:
+                                                                msg_content = str(msg_content)[:300] + "..."
+                                                            output_lines.append(f"  📄 内容: {msg_content}")
+                                                    else:
+                                                        output_lines.append("📝 内容: [空或非字符串]")
+                                                    
+                                                    # 添加分隔线（除了最后一个消息）
+                                                    if k < len(forward_messages):
+                                                        output_lines.append("-" * 40)
+                                            else:
+                                                output_lines.append(f"      ❌ 无法提取转发消息: 数据结构异常")
+                                                output_lines.append(f"      🔍 调试: 返回数据 = {str(forward_result)[:200]}...")
+                                        else:
+                                            output_lines.append(f"      ❌ API返回空结果")
+                                            
+                                    else:
+                                        output_lines.append(f"      ❌ 当前平台不支持获取转发内容")
+                                        
+                                except Exception as forward_error:
+                                    logger.error(f"获取转发消息内容失败: {forward_error}")
+                                    output_lines.append(f"      ❌ 获取转发内容失败: {str(forward_error)}")
+                            else:
+                                output_lines.append(f"      ⚠️  转发消息ID为空")
+                    
+                    # 如果链太长，提示省略
+                    if len(msg.chain) > 3:
+                        output_lines.append(f"    ... 还有{len(msg.chain)-3}个节点")
+            
+            output_lines.append("\n" + "="*50)
+            
+            if forward_content_found:
+                output_lines.append("✅ 元信息分析完成，已提取转发消息内容")
+            else:
+                output_lines.append("✅ 元信息分析完成")
+                output_lines.append("💡 提示: 如果消息中包含转发内容但未显示，请确保:")
+                output_lines.append("  • 消息包含有效的转发组件")
+                output_lines.append("  • 机器人有权限访问转发消息")
+                output_lines.append("  • 转发消息未过期或被撤回")
+            
+            # 发送结果
+            result_text = "\n".join(output_lines)
+            
+            # 如果结果太长，分段发送
+            if len(result_text) > 4000:
+                # 分段发送，避免消息过长
+                lines = result_text.split('\n')
+                current_chunk = []
+                current_length = 0
+                
+                for line in lines:
+                    if current_length + len(line) + 1 > 3800:  # 留一些余量
+                        if current_chunk:
+                            await self._send_with_auto_recall(event, event.plain_result('\n'.join(current_chunk)))
+                            current_chunk = []
+                            current_length = 0
+                            await asyncio.sleep(0.5)  # 避免发送过快
+                    
+                    current_chunk.append(line)
+                    current_length += len(line) + 1
+                
+                if current_chunk:
+                    await self._send_with_auto_recall(event, event.plain_result('\n'.join(current_chunk)))
+            else:
+                await self._send_with_auto_recall(event, event.plain_result(result_text))
+            
+        except Exception as e:
+            logger.error(f"处理teeee指令失败: {e}")
+            await self._send_with_auto_recall(event, event.plain_result(f"❌ 处理teeee指令失败: {str(e)}"))
+
     async def cleanup_temp_files(self) -> None:
         """清理临时文件"""
         try:
@@ -4618,7 +4920,8 @@ class ModComfyUI(Star):
         if not qq_number or qq_number == "0" or qq_number == "":
             return "Astrbot"
             
-        url = f"http://api.mmp.cc/api/qqname?qq={qq_number}"
+        # 使用HTTPS协议的API
+        url = f"https://api.mmp.cc/api/qqname?qq={qq_number}"
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -4639,8 +4942,8 @@ class ModComfyUI(Star):
         except Exception as e:
             logger.debug(f"请求QQ昵称API出错: {str(e)}")
         
-        # 如果API调用失败，返回默认昵称而不是"用户{qq_number}"
-        return "Astrbot"
+        # 如果API调用失败，返回带有QQ号的标识而不是默认"Astrbot"
+        return f"用户{qq_number}"
 
     async def send_fake_forward_message(self, event: AstrMessageEvent, merged_chain: List, image_count: int) -> None:
         """发送伪造转发消息"""
