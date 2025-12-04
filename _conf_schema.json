@@ -295,5 +295,23 @@
         "items": {
             "type": "string"
         }
+    },
+    "enable_fake_forward": {
+        "description": "启用伪造转发消息",
+        "type": "bool",
+        "default": false,
+        "hint": "控制是否启用伪造转发消息功能，当图片数量超过阈值时以转发消息形式发送，true=启用，false=禁用"
+    },
+    "fake_forward_threshold": {
+        "description": "伪造转发图片数量阈值",
+        "type": "int",
+        "default": 2,
+        "hint": "当生成的图片数量超过此阈值时才使用伪造转发消息（建议1-10张）"
+    },
+    "fake_forward_qq": {
+        "description": "伪造的QQ号",
+        "type": "string",
+        "default": "",
+        "hint": "伪造转发消息中显示的QQ号。留空=使用默认设置（昵称：Astrbot，头像：机器人头像），0=使用发送用户的QQ号，1=使用机器人QQ号，其他值=使用指定的QQ号"
     }
 }
