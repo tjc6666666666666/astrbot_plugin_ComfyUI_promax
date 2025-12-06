@@ -1285,8 +1285,8 @@ class ModComfyUI(Star):
         # 验证自动保存配置
         if not isinstance(self.enable_auto_save, bool):
             raise ValueError(f"配置项错误：enable_auto_save（需为bool类型）")
-        if not isinstance(self.auto_save_dir, str) or not self.auto_save_dir.strip():
-            raise ValueError(f"配置项错误：auto_save_dir（需为非空字符串）")
+#        if not isinstance(self.auto_save_dir, str) or not self.auto_save_dir.strip():
+  #          raise ValueError(f"配置项错误：auto_save_dir（需为非空字符串）")
         
 
         for cfg_key, cfg_type in required_configs:
