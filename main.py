@@ -1,4 +1,4 @@
-from astrbot.api.message_components import Plain, Image, Reply, Video
+from astrbot.api.message_components import Plain, Image, Reply, Video, Record
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api.event.filter import CustomFilter
@@ -30,6 +30,8 @@ import io
 import base64
 import requests
 from io import BytesIO
+import subprocess
+import tempfile
 
 # GUI配置管理界面相关导入
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, send_file, session, send_from_directory
@@ -2893,9 +2895,12 @@ class ModComfyUI(Star):
                 
                 # 下载并上传音频文件
                 try:
-                    audio_path = await self._download_and_upload_audio(event, server, audio_info)
-                    if audio_path:
-                        merged_chain.append(Plain(f"\n✅ 音频{audio_idx}已上传为文件"))
+                    audio_result = await self._download_and_upload_audio(event, server, audio_info)
+                    if audio_result:
+                        if audio_result["duration"] and audio_result["duration"] <= 30:
+                            merged_chain.append(Plain(f"\n✅ 音频{audio_idx}({audio_result['duration_info']})已发送为语音消息"))
+                        else:
+                            merged_chain.append(Plain(f"\n✅ 音频{audio_idx}({audio_result['duration_info']})已上传为文件"))
                     else:
                         merged_chain.append(Plain(f"\n❌ 音频{audio_idx}上传失败"))
                 except Exception as e:
@@ -4305,8 +4310,8 @@ class ModComfyUI(Star):
             logger.error(f"上传视频文件失败: {e}")
             return False
 
-    async def _download_and_upload_audio(self, event: AstrMessageEvent, server: ServerState, audio_info: Dict[str, Any]) -> Optional[str]:
-        """下载音频文件并上传到QQ群文件或个人文件"""
+    async def _download_and_upload_audio(self, event: AstrMessageEvent, server: ServerState, audio_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """下载音频文件并上传到QQ群文件或个人文件，返回处理结果信息"""
         try:
             # 获取音频URL
             audio_url = audio_info["url"]
@@ -4353,8 +4358,13 @@ class ModComfyUI(Star):
                 except Exception as e:
                     logger.warning(f"音频自动保存失败: {e}")
             
+            # 检测音频时长（如果ffmpeg未安装会返回None）
+            duration = await self._get_audio_duration(str(temp_audio_path))
+            if duration is None:
+                logger.warning("无法获取音频时长，可能是因为ffprobe未安装，将作为文件上传")
+            
             # 上传音频文件到QQ
-            upload_success = await self._upload_audio_file(event, str(temp_audio_path), filename)
+            upload_success = await self._upload_audio_file(event, str(temp_audio_path), filename, duration)
             
             # 清理临时文件
             try:
@@ -4367,14 +4377,76 @@ class ModComfyUI(Star):
             except Exception as e:
                 logger.warning(f"清理临时音频文件失败: {e}")
             
-            return str(temp_audio_path) if upload_success else None
+            # 返回处理结果
+            if upload_success:
+                duration_info = f"{duration:.2f}秒" if duration else "未知时长"
+                return {
+                    "success": True,
+                    "duration": duration,
+                    "duration_info": duration_info,
+                    "temp_path": str(temp_audio_path)
+                }
+            else:
+                return None
             
         except Exception as e:
             logger.error(f"下载并上传音频失败: {e}")
             return None
 
-    async def _upload_audio_file(self, event: AstrMessageEvent, audio_path: str, filename: str) -> bool:
-        """上传音频文件到群文件或个人文件"""
+    async def _get_audio_duration(self, audio_path: str) -> Optional[float]:
+        """获取音频时长（秒）"""
+        try:
+            # 使用ffprobe获取音频时长
+            cmd = [
+                'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1', audio_path
+            ]
+            
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, lambda: subprocess.run(
+                cmd, capture_output=True, text=True, timeout=10
+            ))
+            
+            if result.returncode == 0:
+                duration = float(result.stdout.strip())
+                logger.info(f"音频时长: {duration:.2f}秒")
+                return duration
+            else:
+                logger.warning(f"获取音频时长失败: {result.stderr}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"获取音频时长异常: {e}")
+            return None
+
+    async def _convert_to_wav(self, input_path: str, output_path: str) -> bool:
+        """将音频转换为WAV格式"""
+        try:
+            # 使用ffmpeg转换为WAV格式
+            cmd = [
+                'ffmpeg', '-y', '-i', input_path,
+                '-acodec', 'pcm_s16le', '-ar', '24000', '-ac', '1',
+                output_path
+            ]
+            
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, lambda: subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30
+            ))
+            
+            if result.returncode == 0:
+                logger.info(f"音频已转换为WAV格式: {output_path}")
+                return True
+            else:
+                logger.warning(f"音频格式转换失败: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"音频格式转换异常: {e}")
+            return False
+
+    async def _upload_audio_file(self, event: AstrMessageEvent, audio_path: str, filename: str, duration: Optional[float] = None) -> bool:
+        """上传音频文件到QQ群文件或个人文件，如果小于30秒则发送为语音消息"""
         try:
             # 检查是否为QQ平台
             from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
@@ -4384,6 +4456,56 @@ class ModComfyUI(Star):
                 # 获取发送者和群组信息
                 group_id = event.get_group_id()
                 sender_qq = event.get_sender_id()
+                
+                # 检查音频时长，如果小于30秒则转换为语音消息
+                # 如果duration为None（ffprobe未安装），直接走文件上传逻辑
+                if duration is not None and duration <= 30:
+                    logger.info(f"音频时长{duration:.2f}秒 <= 30秒，尝试转换为语音消息发送")
+                    
+                    # 转换为WAV格式
+                    wav_path = audio_path.rsplit('.', 1)[0] + '.wav'
+                    if await self._convert_to_wav(audio_path, wav_path):
+                        try:
+                            # 创建语音消息组件并发送
+                            record_msg = Record(file=wav_path, url=wav_path)
+                            
+                            if group_id:
+                                await client.send_group_msg(
+                                    group_id=int(group_id),
+                                    message=record_msg
+                                )
+                                logger.info(f"语音消息已发送到群聊: 群ID={group_id}")
+                            else:
+                                await client.send_private_msg(
+                                    user_id=int(sender_qq),
+                                    message=record_msg
+                                )
+                                logger.info(f"语音消息已发送给用户: 用户QQ={sender_qq}")
+                            
+                            # 清理临时WAV文件
+                            try:
+                                await asyncio.get_event_loop().run_in_executor(
+                                    None, lambda: os.unlink(wav_path) if os.path.exists(wav_path) else None
+                                )
+                            except:
+                                pass
+                            
+                            return True
+                            
+                        except Exception as e:
+                            logger.warning(f"发送语音消息失败，转为文件上传: {e}")
+                            # 如果语音发送失败，继续下面的文件上传逻辑
+                    
+                    else:
+                        logger.warning("WAV格式转换失败，转为文件上传")
+                
+                # 文件上传逻辑（大于30秒、ffmpeg未安装或语音发送失败时执行）
+                if duration is None:
+                    logger.info("无法获取音频时长，上传为文件")
+                elif duration > 30:
+                    logger.info(f"音频时长{duration:.2f}秒 > 30秒，上传为文件")
+                else:
+                    logger.info("语音发送失败或转换失败，上传为文件")
                 
                 if group_id:
                     # 群聊：上传到群文件
