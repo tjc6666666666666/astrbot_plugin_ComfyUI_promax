@@ -9,5 +9,5 @@ opencv-python>=4.5.0
 
 # Web 框架 (用于配置界面)
 Flask>=2.3.0
-
+Waitress
 
