@@ -97,10 +97,18 @@ class ModComfyUI(Star):
             full_text = event.message_obj.message_str.strip()
             return full_text == "teeee"
 
+    class AddServerFilter(CustomFilter):
+        def filter(self, event: AstrMessageEvent, cfg: AstrBotConfig) -> bool:
+            full_text = event.message_obj.message_str.strip()
+            # 检查是否以"添加服务器"开头
+            return full_text.startswith("添加服务器")
+
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         # 1. 加载配置
         self.comfyui_servers = self._parse_comfyui_servers(config.get("comfyui_url", []))
+        # 临时服务器列表（仅在本次运行中有效，不写入配置文件）
+        self.temp_servers = []  # 存储临时添加的ServerState对象
         self.ckpt_name = config.get("ckpt_name")
         self.sampler_name = config.get("sampler_name")
         self.scheduler = config.get("scheduler")
@@ -251,6 +259,9 @@ class ModComfyUI(Star):
 
         # 视频发送配置
         self.max_upload_size = config.get("max_upload_size", 100)  # 最大直接发送视频大小（MB）
+        
+        # 音频转语音配置
+        self.enable_audio_to_voice = config.get("enable_audio_to_voice", True)  # 是否启用音频转语音功能
 
         # GUI配置管理界面配置
         self.enable_gui = config.get("enable_gui", False)
@@ -1388,30 +1399,12 @@ class ModComfyUI(Star):
                 raise ValueError(f"配置项错误：{cfg_key}（需为{cfg_type.__name__}类型）")
             if cfg_key not in ["lora_config", "enable_translation"] and not cfg_value:
                 raise ValueError(f"配置项错误：{cfg_key}（非空）")
-        if not (0 <= self.default_denoise <= 1):
-            raise ValueError(f"配置项错误：default_denoise（需为0-1之间的数值）")
-        if not (1 <= self.txt2img_batch_size <= self.max_txt2img_batch):
-            raise ValueError(f"配置项错误：txt2img_batch_size（需为1-{self.max_txt2img_batch}之间的整数）")
-        if not (1 <= self.img2img_batch_size <= self.max_img2img_batch):
-            raise ValueError(f"配置项错误：img2img_batch_size（需为1-{self.max_img2img_batch}之间的整数）")
-        if not (1 <= self.max_task_queue <= 100):
-            raise ValueError(f"配置项错误：max_task_queue（需为1-100之间的整数）")
-        if not (64 <= self.min_width < self.max_width <= 4096):
-            raise ValueError(f"配置项错误：宽度范围（min_width需≥64，max_width需≤4096，且min_width<max_width）")
-        if not (64 <= self.min_height < self.max_height <= 4096):
-            raise ValueError(f"配置项错误：高度范围（min_height需≥64，max_height需≤4096，且min_height<max_height）")
-        if not (10 <= self.queue_check_delay <= 120):
-            raise ValueError(f"配置项错误：queue_check_delay（需为10-120之间的整数，单位：秒）")
-        if not (3 <= self.queue_check_interval <= 30):
-            raise ValueError(f"配置项错误：queue_check_interval（需为3-30之间的整数，单位：秒）")
-        if not (1 <= self.empty_queue_max_retry <= 5):
-            raise ValueError(f"配置项错误：empty_queue_max_retry（需为1-5之间的整数）")
-        if not (1 <= self.max_lora_count <= 20):
-            raise ValueError(f"配置项错误：max_lora_count（需为1-20之间的整数）")
-        if not (0.0 <= self.min_lora_strength < self.max_lora_strength <= 5.0):
-            raise ValueError(f"配置项错误：LoRA强度范围（min需≥0，max需≤5，且min<max）")
-        if not (1 <= self.max_concurrent_tasks_per_user <= 10):
-            raise ValueError(f"配置项错误：max_concurrent_tasks_per_user（需为1-10之间的整数）")
+
+
+
+
+
+
         if not self.parsed_time_ranges:
             logger.warning(f"开放时间格式错误：{self.open_time_ranges}，已自动使用默认时间段")
             self.open_time_ranges = "7:00-8:00,11:00-14:00,17:00-24:00"
@@ -1496,26 +1489,64 @@ class ModComfyUI(Star):
         # 如果服务器健康且没有worker，启动新worker
         if server.healthy and (not server.worker or server.worker.done()):
             if server.worker and not server.worker.done():
-                server.worker.cancel()
+                # 先标记为不健康，让worker优雅退出
+                server.healthy = False
+                # 给worker时间完成当前任务
                 try:
-                    await server.worker
-                except asyncio.CancelledError:
-                    pass
+                    await asyncio.wait_for(server.worker, timeout=30)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    # 超时或取消，直接取消worker
+                    server.worker.cancel()
+                    try:
+                        await server.worker
+                    except asyncio.CancelledError:
+                        pass
             
             logger.info(f"为服务器{server.name}启动worker")
             server.worker = asyncio.create_task(
                 self._worker_loop(f"worker-{server.server_id}", server)
             )
         
-        # 如果服务器不健康但有活跃worker，终止它
+        # 如果服务器不健康但有活跃worker，不要立即终止
+        # 让worker自己检测到不健康状态后优雅退出，完成当前任务
         elif not server.healthy and server.worker and not server.worker.done():
-            logger.info(f"服务器{server.name}异常，终止其worker")
-            server.worker.cancel()
-            try:
-                await server.worker
-            except asyncio.CancelledError:
-                pass
-            server.worker = None
+            logger.info(f"服务器{server.name}异常，worker将完成当前任务后退出")
+            # 不立即取消worker，让它自己检测状态并退出
+        
+        # 检查是否所有服务器都不健康，如果是则清空任务队列
+        await self._check_and_clear_queue_if_no_healthy_servers()
+    
+    async def _check_and_clear_queue_if_no_healthy_servers(self) -> None:
+        """检查是否所有服务器都不健康，如果是则清空任务队列并通知用户"""
+        has_healthy_server = any(server.healthy for server in self.comfyui_servers)
+        
+        if not has_healthy_server and self.task_queue.qsize() > 0:
+            logger.warning(f"所有服务器均不健康，清空任务队列（{self.task_queue.qsize()}个任务）")
+            # 清空队列中的所有任务并通知用户
+            while not self.task_queue.empty():
+                try:
+                    task_data = await asyncio.wait_for(self.task_queue.get(), timeout=1.0)
+                    event = task_data.get("event")
+                    user_id = task_data.get("user_id")
+                    if event:
+                        try:
+                            await self._send_with_auto_recall(
+                                event, 
+                                event.plain_result(
+                                    "\n❌ 所有ComfyUI服务器均不可用，任务已取消。\n"
+                                    "请稍后重新提交任务。"
+                                )
+                            )
+                        except Exception as e:
+                            logger.error(f"通知用户任务取消失败：{e}")
+                    # 减少用户任务计数
+                    if user_id:
+                        await self._decrement_user_task_count(user_id)
+                    self.task_queue.task_done()
+                except asyncio.TimeoutError:
+                    break
+                except Exception as e:
+                    logger.error(f"清空任务队列时出错：{e}")
 
     async def _check_server_health(self, server: ServerState) -> bool:
         try:
@@ -1604,26 +1635,40 @@ class ModComfyUI(Star):
             while True:
                 # 检查服务器是否健康，如果不健康则退出循环
                 if not server.healthy:
-                    logger.info(f"{worker_name}检测到服务器{server.name}不健康，退出循环")
+                    logger.info(f"{worker_name}检测到服务器{server.name}不健康，停止接收新任务，退出循环")
                     return
-                    
+
                 try:
                     # 等待获取任务（超时10秒，避免无限阻塞）
                     task_data = await asyncio.wait_for(self.task_queue.get(), timeout=10.0)
                 except asyncio.TimeoutError:
                     # 超时后检查服务器健康状态，不健康则退出
                     if not server.healthy:
-                        logger.info(f"{worker_name}检测到服务器{server.name}不健康，退出循环")
+                        logger.info(f"{worker_name}检测到服务器{server.name}不健康，停止接收新任务，退出循环")
                         return
                     continue
-                    
+
                 try:
+                    # 检查任务是否已经获取后服务器才变不健康
+                    if not server.healthy:
+                        logger.info(f"{worker_name}检测到服务器{server.name}不健康，将任务重新放回队列")
+                        await self.task_queue.put(task_data)
+                        return
+
                     # 使用绑定的服务器处理任务
                     await self._process_comfyui_task_with_server(server, **task_data)
                 except Exception as e:
-                    event = task_data["event"]
-                    err_msg = f"\n图片生成失败：{str(e)[:1000]}"
-                    await self._send_with_auto_recall(event, event.plain_result(err_msg))
+                    event = task_data.get("event")
+                    user_id = task_data.get("user_id")
+                    # 检查是否是服务器不健康导致的错误，如果是则将任务重新放回队列
+                    if not server.healthy or ("服务器.*不健康" in str(e) or "故障转移" in str(e)):
+                        logger.info(f"{worker_name}检测到服务器{server.name}故障，将任务重新放回队列")
+                        await self.task_queue.put(task_data)
+                        return
+                    # 其他错误，通知用户
+                    if event:
+                        err_msg = f"\n图片生成失败：{str(e)[:1000]}"
+                        await self._send_with_auto_recall(event, event.plain_result(err_msg))
                     logger.error(f"{worker_name}处理任务失败：{str(e)}")
                 finally:
                     self.task_queue.task_done()
@@ -2034,7 +2079,7 @@ class ModComfyUI(Star):
                     del self.user_task_counts[user_id]
 
     async def _process_comfyui_task_with_server(self, server: ServerState,** task_data) -> None:
-        """使用指定服务器处理任务，带重试机制"""
+        """使用指定服务器处理任务，带重试机制和故障转移"""
         max_retries = 2  # 单服务器重试次数
         retry_count = 0
         last_error = None
@@ -2043,6 +2088,7 @@ class ModComfyUI(Star):
         is_web_api = task_data.get("is_web_api", False)
         is_llm_tool = task_data.get("is_llm_tool", False)
         task_id = task_data.get("task_id")
+        should_retry_on_other_server = False  # 是否需要在其他服务器上重试
         
         try:
             while retry_count <= max_retries:
@@ -2070,6 +2116,17 @@ class ModComfyUI(Star):
                 except Exception as e:
                     last_error = e
                     error_msg = str(e)
+                    
+                    # 检查是否是永久性错误（用户端问题，不需要重试服务器）
+                    if ("URL已过期" in error_msg or "下载失败" in error_msg or 
+                        "文件过小" in error_msg or "上传失败" in error_msg or
+                        "PERMANENT_ERROR:" in error_msg):
+                        # 这些是用户端问题，直接抛出，不要重试或转移到其他服务器
+                        # 清理PERMANENT_ERROR前缀
+                        if "PERMANENT_ERROR:" in error_msg:
+                            error_msg = error_msg.replace("PERMANENT_ERROR:", "")
+                            raise Exception(error_msg)
+                        raise
                     
                     # 检查是否是模型不存在的错误，如果是则不重试
                     if self._is_model_not_found_error(error_msg):
@@ -2119,8 +2176,9 @@ class ModComfyUI(Star):
                     logger.error(f"服务器{server.name}处理任务失败（重试{retry_count}/{max_retries}）：{error_msg}")
                     await self._handle_server_failure(server)
                     
-                    # 如果服务器已被标记为不健康，不再重试
+                    # 如果服务器已被标记为不健康，不再重试当前服务器，标记需要转移到其他服务器
                     if not server.healthy:
+                        should_retry_on_other_server = True
                         break
                         
                     retry_count += 1
@@ -2134,12 +2192,23 @@ class ModComfyUI(Star):
             else:
                 raise Exception(f"服务器{server.name}处理任务失败，原因未知")
                 
+        except Exception as e:
+            # 如果需要转移到其他服务器，将任务重新放回队列
+            if should_retry_on_other_server:
+                logger.info(f"服务器{server.name}不健康，将任务重新放回队列供其他服务器处理")
+                # 将任务重新放回队列（不减少用户任务计数，因为任务还在队列中）
+                await self.task_queue.put(task_data)
+            else:
+                # 其他错误，正常抛出异常
+                raise
         finally:
-            # 无论成功还是失败，都确保减少用户任务计数
-            if user_id:
-                await self._decrement_user_task_count(user_id)
-            # 确保释放服务器
-            await self._mark_server_busy(server, False)
+            # 如果不是故障转移的情况，才减少用户任务计数和释放服务器
+            if not should_retry_on_other_server:
+                # 无论成功还是失败，都确保减少用户任务计数
+                if user_id:
+                    await self._decrement_user_task_count(user_id)
+                # 确保释放服务器
+                await self._mark_server_busy(server, False)
 
     async def _process_web_api_task(self, server: ServerState, task_data: Dict[str, Any]) -> None:
         """处理Web API任务"""
@@ -2602,12 +2671,56 @@ class ModComfyUI(Star):
         current_width: int,
         current_height: int,
         image_filename: Optional[str] = None,
+        img_path: Optional[str] = None,
         denoise: float = 1,
         current_batch_size: int = 1,
         lora_list: List[Dict[str, Any]] = [],
         selected_model: Optional[str] = None,
         user_id: Optional[str] = None
     ) -> None:
+        # 如果有本地图片路径，先上传到ComfyUI服务器
+        image_filename = image_filename  # 保持默认值（可能从Web API传来）
+        local_img_path = img_path  # 新增：本地图片路径
+
+        if local_img_path:
+            # 图生图任务：上传本地图片到ComfyUI服务器
+            try:
+                # 验证文件是否存在
+                if not os.path.exists(local_img_path):
+                    raise Exception(f"PERMANENT_ERROR:图片文件不存在：{local_img_path}")
+                file_size = os.path.getsize(local_img_path)
+                if file_size < 10240:  # 小于10KB
+                    logger.warning(f"图片文件过小（{file_size}字节），可能已损坏")
+                    raise Exception(f"PERMANENT_ERROR:图片文件过小，可能已损坏")
+
+                # 上传图片到ComfyUI服务器
+                image_filename = await self._upload_image_to_comfyui(server, local_img_path)
+
+                if not image_filename:
+                    raise Exception(f"PERMANENT_ERROR:图片上传失败")
+
+                logger.info(f"成功上传图片到ComfyUI服务器: {image_filename}")
+
+                # 上传完成后，如果图片是临时文件，清理临时文件
+                if local_img_path and os.path.exists(local_img_path):
+                    # 检查是否是临时文件（不包含img2img_inputs路径）
+                    if "img2img_inputs" not in local_img_path:
+                        try:
+                            # 延迟清理临时文件
+                            asyncio.create_task(self._cleanup_temp_file(local_img_path))
+                            logger.info(f"已安排清理临时图片文件: {local_img_path}")
+                        except Exception as e:
+                            logger.warning(f"安排清理临时文件失败: {e}")
+
+            except Exception as e:
+                error_msg = str(e)
+                # 检查是否是永久性错误（不需要重试的错误）
+                if error_msg.startswith("PERMANENT_ERROR:"):
+                    # 直接抛出永久性错误，不要重试
+                    raise Exception(error_msg.replace("PERMANENT_ERROR:", ""))
+                else:
+                    raise Exception(f"图片上传失败：{error_msg[:1000]}")
+
         comfy_prompt = self._build_comfyui_prompt(
             prompt, current_seed, current_width, current_height, image_filename, denoise, current_batch_size, lora_list, selected_model
         )
@@ -2624,9 +2737,9 @@ class ModComfyUI(Star):
                 for lora in lora_list
             ])
             extra_info += lora_info
-        await self._send_with_auto_recall(event, event.plain_result(
-            f"\n{task_type}任务已下发至服务器【{server.name}】：\n提示词：{self._truncate_prompt(prompt)}\nSeed：{current_seed}\n{extra_info}\n任务ID：{prompt_id[:8]}..."
-        ))
+  #      await self._send_with_auto_recall(event, event.plain_result(
+   #         f"\n{task_type}任务已下发至服务器【{server.name}】：\n提示词：{self._truncate_prompt(prompt)}\nSeed：{current_seed}\n{extra_info}\n任务ID：{prompt_id[:8]}..."
+  #      ))
         history_data = await self._poll_task_status(server, prompt_id)
         if not history_data or history_data.get("status", {}).get("completed") is False:
             raise Exception("任务超时或未完成（超时10分钟）")
@@ -2731,18 +2844,125 @@ class ModComfyUI(Star):
         event: AstrMessageEvent,
         prompt: Dict[str, Any],
         workflow_name: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        image_paths: Optional[List[str]] = None,
+        workflow_config: Optional[Dict[str, Any]] = None
     ) -> None:
         """处理workflow任务"""
         workflow_info = self.workflows[workflow_name]
-        config = workflow_info["config"]
+        config = workflow_config if workflow_config is not None else workflow_info["config"]
+        
+        # 如果有已下载的图片需要上传，直接上传
+        images = []
+        if image_paths and config.get("input_nodes"):
+            logger.info(f"开始上传 {len(image_paths)} 张已下载图片到服务器 {server.name}")
+            
+            for i, img_path in enumerate(image_paths):
+                try:
+                    # 验证文件是否存在
+                    if not os.path.exists(img_path):
+                        raise Exception(f"PERMANENT_ERROR:第 {i+1} 张图片文件不存在：{img_path}")
+                    file_size = os.path.getsize(img_path)
+                    if file_size < 10240:  # 小于10KB
+                        logger.warning(f"第 {i+1} 张图片文件过小（{file_size}字节），可能已损坏")
+                        raise Exception(f"PERMANENT_ERROR:第 {i+1} 张图片文件过小，可能已损坏")
+                    
+                    # 直接上传图片到ComfyUI服务器
+                    image_filename = await self._upload_image_to_comfyui(server, img_path)
+                    
+                    if not image_filename:
+                        raise Exception(f"PERMANENT_ERROR:第 {i+1} 张图片上传失败")
+                    
+                    images.append(image_filename)
+                    logger.info(f"成功上传第 {i+1} 张图片: {image_filename}")
+                except Exception as e:
+                    error_msg = str(e)
+                    # 检查是否是永久性错误（不需要重试的错误）
+                    if error_msg.startswith("PERMANENT_ERROR:"):
+                        # 直接抛出永久性错误，不要重试
+                        raise Exception(error_msg.replace("PERMANENT_ERROR:", ""))
+                    else:
+                        raise Exception(f"图片上传失败：{error_msg[:1000]}")
+            
+            # 使用与 _build_workflow 相同的逻辑更新 prompt 中的图片节点
+            if images:
+                input_nodes = config.get("input_nodes", [])
+                input_mappings = config.get("input_mappings", {})
+                
+                # 用于跟踪已分配的图片索引
+                used_image_indices = set()
+                
+                # 首先处理指定了image_index的节点
+                for node_id in input_nodes:
+                    if node_id in input_mappings and node_id in prompt:
+                        mapping = input_mappings[node_id]
+                        param_name = mapping.get("parameter_name", "image")
+                        if param_name == "image":
+                            image_index = mapping.get("image_index")
+                            if image_index is not None:
+                                # 有明确指定image_index的节点
+                                image_mode = mapping.get("image_mode", "single")
+                                
+                                if image_mode == "single":
+                                    if image_index < len(images):
+                                        prompt[node_id]["inputs"][param_name] = images[image_index]
+                                        used_image_indices.add(image_index)
+                                        logger.info(f"节点 {node_id} 使用指定索引 {image_index} 的图片")
+                                    else:
+                                        prompt[node_id]["inputs"][param_name] = images[0]
+                                        used_image_indices.add(0)
+                                        logger.info(f"节点 {node_id} 索引超出范围，使用第一张图片")
+                                elif image_mode == "list":
+                                    prompt[node_id]["inputs"][param_name] = images
+                                    logger.info(f"节点 {node_id} 使用所有图片列表")
+                                elif image_mode == "all":
+                                    prompt[node_id]["inputs"][param_name] = images
+                                    logger.info(f"节点 {node_id} 使用全部图片")
+                
+                # 然后处理未指定image_index的节点，自动分配未使用的图片
+                current_image_index = 0
+                for node_id in input_nodes:
+                    if node_id in input_mappings and node_id in prompt:
+                        mapping = input_mappings[node_id]
+                        param_name = mapping.get("parameter_name", "image")
+                        if param_name == "image":
+                            image_index = mapping.get("image_index")
+                            if image_index is None:
+                                # 未指定image_index的节点，自动分配
+                                # 找到下一个未使用的图片索引
+                                while current_image_index in used_image_indices and current_image_index < len(images):
+                                    current_image_index += 1
+                                
+                                if current_image_index < len(images):
+                                    prompt[node_id]["inputs"][param_name] = images[current_image_index]
+                                    used_image_indices.add(current_image_index)
+                                    logger.info(f"节点 {node_id} 自动分配索引 {current_image_index} 的图片")
+                                    current_image_index += 1
+                                else:
+                                    # 没有更多图片了，使用第一张图片
+                                    prompt[node_id]["inputs"][param_name] = images[0]
+                                    used_image_indices.add(0)
+                                    logger.info(f"节点 {node_id} 没有足够图片，使用第一张图片")
+            
+            # 上传完成后，如果图片是临时文件且启用了永久保存，清理临时文件
+            # (永久保存已经在下载时完成，这里只需要清理临时文件)
+            for i, img_path in enumerate(image_paths):
+                if img_path and os.path.exists(img_path):
+                    # 检查是否是临时文件（不包含workflow_inputs路径）
+                    if "workflow_inputs" not in img_path:
+                        try:
+                            # 延迟清理临时文件，给用户一些时间查看错误信息
+                            asyncio.create_task(self._cleanup_temp_file(img_path))
+                            logger.info(f"已安排清理临时图片文件: {img_path}")
+                        except Exception as e:
+                            logger.warning(f"安排清理临时文件失败: {e}")
         
         # 发送workflow到ComfyUI
         prompt_id = await self._send_comfyui_prompt(server, prompt)
         
-        await self._send_with_auto_recall(event, event.plain_result(
-            f"\nWorkflow任务「{config['name']}」已下发至服务器【{server.name}】：\n任务ID：{prompt_id[:8]}..."
-        ))
+       # await self._send_with_auto_recall(event, event.plain_result(
+        #    f"\nWorkflow任务「{config['name']}」已下发至服务器【{server.name}】：\n任务ID：{prompt_id[:8]}..."
+   #     ))
         
         # 轮询任务状态
         history_data = await self._poll_task_status(server, prompt_id)
@@ -2941,25 +3161,33 @@ class ModComfyUI(Star):
                 return resp_data.get("prompt_id", "")
 
     async def _check_queue_empty(self, server: ServerState) -> bool:
+        """检查服务器队列是否为空，失败时触发服务器故障转移"""
         url = f"{server.url}/api/queue"
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=10) as resp:
                     if resp.status != 200:
-                        logger.warning(f"队列状态查询失败（HTTP {resp.status}），跳过本次检查")
-                        return False
+                        # 将队列查询失败视为服务器故障，触发故障处理
+                        logger.warning(f"队列状态查询失败（HTTP {resp.status}），触发服务器故障处理")
+                        await self._handle_server_failure(server)
+                        # 返回 True 让外层逻辑跳过队列检查，避免无限等待
+                        return True
                     resp_data = await resp.json()
                     if not isinstance(resp_data, dict) or "queue_running" not in resp_data or "queue_pending" not in resp_data:
-                        logger.warning(f"队列返回格式异常：{resp_data}，跳过本次检查")
-                        return False
+                        logger.warning(f"队列返回格式异常：{resp_data}，触发服务器故障处理")
+                        await self._handle_server_failure(server)
+                        return True
                     running_empty = len(resp_data["queue_running"]) == 0
                     pending_empty = len(resp_data["queue_pending"]) == 0
                     return running_empty and pending_empty
         except Exception as e:
-            logger.warning(f"队列检查异常：{str(e)}，跳过本次检查")
-            return False
+            # 队列查询异常也视为服务器故障
+            logger.warning(f"队列检查异常：{str(e)}，触发服务器故障处理")
+            await self._handle_server_failure(server)
+            return True
 
     async def _poll_task_status(self, server: ServerState, prompt_id: str, timeout: int = 600, interval: int = 3) -> Dict[str, Any]:
+        """轮询任务状态，支持服务器故障转移"""
         url = f"{server.url}/history/{prompt_id}"
         start_time = asyncio.get_event_loop().time()
         empty_queue_retry_count = 0
@@ -2968,6 +3196,11 @@ class ModComfyUI(Star):
             while True:
                 current_time = asyncio.get_event_loop().time()
                 elapsed_time = current_time - start_time
+                
+                # 检查服务器是否健康，不健康则立即失败
+                if not server.healthy:
+                    raise Exception(f"服务器【{server.name}】不健康，无法完成任务，触发故障转移")
+                
                 if elapsed_time > timeout:
                     raise Exception(f"任务超时（{timeout}秒未完成）")
                 try:
@@ -2978,8 +3211,25 @@ class ModComfyUI(Star):
                             if task_data and task_data.get("status", {}).get("completed"):
                                 empty_queue_retry_count = 0
                                 return task_data
-                except Exception as e:
-                    logger.warning(f"历史状态查询异常：{str(e)}，继续轮询")
+                        else:
+                            # 历史查询失败，触发服务器故障处理
+                            logger.warning(f"历史状态查询失败（HTTP {resp.status}），触发服务器故障处理")
+                            await self._handle_server_failure(server)
+                except (aiohttp.ClientError, asyncio.TimeoutError, Exception) as e:
+                    error_msg = str(e) if str(e) else f"{type(e).__name__}（错误信息为空）"
+                    logger.warning(f"历史状态查询异常：{error_msg}")
+                    # 检查是否是服务器不健康导致的异常
+                    if not server.healthy:
+                        raise
+                    # 对于超时或网络连接错误，触发服务器故障处理
+                    if isinstance(e, (asyncio.TimeoutError, aiohttp.ClientConnectorError, 
+                                      aiohttp.ClientOSError, aiohttp.ServerDisconnectedError)):
+                        logger.warning(f"检测到网络连接问题，触发服务器故障处理")
+                        await self._handle_server_failure(server)
+                        # 检查服务器是否已不健康，如果是则抛出异常触发故障转移
+                        if not server.healthy:
+                            raise
+                    # 其他异常继续轮询
                 if current_time >= queue_check_start_time:
                     if int(elapsed_time) % self.queue_check_interval == 0:
                         is_queue_empty = await self._check_queue_empty(server)
@@ -3081,6 +3331,97 @@ class ModComfyUI(Star):
                 url_params["preview"] = "true"
             query_str = "&".join([f"{k}={quote(v)}" for k, v in url_params.items()])
             return f"{server.url}/view?{query_str}"
+
+    async def _save_img2img_image_permanently(self, img_path: str, user_id: str) -> Optional[str]:
+        """将图生图输入图片永久保存到本地
+
+        Args:
+            img_path: 临时图片文件路径
+            user_id: 用户ID
+
+        Returns:
+            保存后的文件路径，如果保存失败则返回None
+        """
+        try:
+            # 创建保存目录
+            now = datetime.now()
+            # 如果是绝对路径，直接使用；如果是相对路径，则在插件目录下创建
+            auto_save_path = Path(self.auto_save_dir)
+            if auto_save_path.is_absolute():
+                save_dir = auto_save_path / "img2img_inputs" / str(now.year) / f"{now.month:02d}" / f"{now.day:02d}"
+            else:
+                save_dir = Path(os.path.dirname(__file__)) / self.auto_save_dir / "img2img_inputs" / str(now.year) / f"{now.month:02d}" / f"{now.day:02d}"
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            # 生成带时间戳的文件名（不包含用户信息）
+            timestamp = now.strftime("%Y%m%d_%H%M%S")
+            original_name = os.path.basename(img_path)
+
+            name_part, ext = os.path.splitext(original_name)
+            saved_filename = f"{timestamp}_img2img{ext}"
+            save_path = save_dir / saved_filename
+
+            # 复制文件到永久位置
+            def copy_file():
+                import shutil
+                shutil.copy2(img_path, save_path)
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, copy_file)
+
+            logger.info(f"图生图输入图片已永久保存: {save_path}")
+            return str(save_path)
+
+        except Exception as e:
+            logger.error(f"永久保存图生图图片失败: {str(e)}")
+            return None
+
+    async def _save_workflow_image_permanently(self, img_path: str, workflow_name: str, user_id: str, image_index: int) -> Optional[str]:
+        """将workflow输入图片永久保存到本地
+        
+        Args:
+            img_path: 临时图片文件路径
+            workflow_name: workflow名称
+            user_id: 用户ID
+            image_index: 图片索引
+            
+        Returns:
+            保存后的文件路径，如果保存失败则返回None
+        """
+        try:
+            # 创建保存目录
+            now = datetime.now()
+            # 如果是绝对路径，直接使用；如果是相对路径，则在插件目录下创建
+            auto_save_path = Path(self.auto_save_dir)
+            if auto_save_path.is_absolute():
+                save_dir = auto_save_path / "workflow_inputs" / workflow_name / str(now.year) / f"{now.month:02d}" / f"{now.day:02d}"
+            else:
+                save_dir = Path(os.path.dirname(__file__)) / self.auto_save_dir / "workflow_inputs" / workflow_name / str(now.year) / f"{now.month:02d}" / f"{now.day:02d}"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 生成带时间戳的文件名（不包含用户信息）
+            timestamp = now.strftime("%Y%m%d_%H%M%S")
+            original_name = os.path.basename(img_path)
+            
+            # 添加工作流名和图片索引信息
+            name_part, ext = os.path.splitext(original_name)
+            saved_filename = f"{timestamp}_{workflow_name}_img{image_index+1}{ext}"
+            save_path = save_dir / saved_filename
+            
+            # 复制文件到永久位置
+            def copy_file():
+                import shutil
+                shutil.copy2(img_path, save_path)
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, copy_file)
+            
+            logger.info(f"Workflow输入图片已永久保存: {save_path}")
+            return str(save_path)
+            
+        except Exception as e:
+            logger.error(f"永久保存workflow图片失败: {str(e)}")
+            return None
 
     async def _cleanup_temp_file(self, temp_file_path: str) -> None:
         """清理临时文件"""
@@ -4457,10 +4798,10 @@ class ModComfyUI(Star):
                 group_id = event.get_group_id()
                 sender_qq = event.get_sender_id()
                 
-                # 检查音频时长，如果小于30秒则转换为语音消息
-                # 如果duration为None（ffprobe未安装），直接走文件上传逻辑
-                if duration is not None and duration <= 30:
-                    logger.info(f"音频时长{duration:.2f}秒 <= 30秒，尝试转换为语音消息发送")
+                # 检查是否启用音频转语音功能和音频时长
+                # 如果未启用转语音、duration为None（ffprobe未安装），直接走文件上传逻辑
+                if self.enable_audio_to_voice and duration is not None and duration <= 30:
+                    logger.info(f"音频时长{duration:.2f}秒 <= 30秒，启用转语音功能，尝试转换为语音消息发送")
                     
                     # 转换为WAV格式
                     wav_path = audio_path.rsplit('.', 1)[0] + '.wav'
@@ -4499,11 +4840,16 @@ class ModComfyUI(Star):
                     else:
                         logger.warning("WAV格式转换失败，转为文件上传")
                 
-                # 文件上传逻辑（大于30秒、ffmpeg未安装或语音发送失败时执行）
+                # 文件上传逻辑（大于30秒、ffmpeg未安装、语音发送失败或转语音功能未启用时执行）
                 if duration is None:
                     logger.info("无法获取音频时长，上传为文件")
                 elif duration > 30:
-                    logger.info(f"音频时长{duration:.2f}秒 > 30秒，上传为文件")
+                    if self.enable_audio_to_voice:
+                        logger.info(f"音频时长{duration:.2f}秒 > 30秒，转语音功能已启用但超时，上传为文件")
+                    else:
+                        logger.info(f"音频时长{duration:.2f}秒，转语音功能未启用，直接上传为文件")
+                elif not self.enable_audio_to_voice:
+                    logger.info(f"音频时长{duration:.2f}秒 <= 30秒，但转语音功能未启用，上传为文件")
                 else:
                     logger.info("语音发送失败或转换失败，上传为文件")
                 
@@ -5320,6 +5666,79 @@ class ModComfyUI(Star):
             # 如果伪造转发失败，使用普通发送方式
             await event.send(event.chain_result(merged_chain))
 
+    # 添加临时服务器指令
+    @filter.custom_filter(AddServerFilter)
+    async def handle_add_server(self, event: AstrMessageEvent) -> None:
+        """处理添加临时服务器指令"""
+        try:
+            full_text = event.message_obj.message_str.strip()
+            
+            # 解析命令：添加服务器 <URL>,<名称>
+            parts = full_text.split(None, 2)  # 分割为最多3部分
+            if len(parts) < 2:
+                await self._send_with_auto_recall(event, event.plain_result(
+                    "❌ 命令格式错误\n使用方法：添加服务器 <URL>,<名称>\n示例：添加服务器 http://127.0.0.1:8188,临时服务器1"
+                ))
+                return
+            
+            server_info = parts[1].strip()
+            if "," not in server_info:
+                await self._send_with_auto_recall(event, event.plain_result(
+                    "❌ 服务器信息格式错误\n使用方法：添加服务器 <URL>,<名称>\n示例：添加服务器 http://127.0.0.1:8188,临时服务器1"
+                ))
+                return
+            
+            url, name = server_info.split(",", 1)
+            url = url.strip()
+            name = name.strip()
+            
+            # 验证URL格式
+            if not url.startswith(("http://", "https://")):
+                await self._send_with_auto_recall(event, event.plain_result(
+                    f"❌ URL格式错误：{url}\n需以http://或https://开头"
+                ))
+                return
+            
+            # 验证服务器是否可以连接
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f"{url}/system_stats", timeout=10) as resp:
+                        if resp.status != 200:
+                            await self._send_with_auto_recall(event, event.plain_result(
+                                f"❌ 无法连接到服务器：{url}\nHTTP状态码：{resp.status}\n请检查服务器地址是否正确"
+                            ))
+                            return
+            except Exception as e:
+                await self._send_with_auto_recall(event, event.plain_result(
+                    f"❌ 无法连接到服务器：{url}\n错误信息：{str(e)[:200]}\n请检查服务器地址是否正确"
+                ))
+                return
+            
+            # 创建新的临时服务器
+            import copy
+            new_server_id = len(self.comfyui_servers) + len(self.temp_servers)
+            new_server = self.ServerState(url, name or f"临时服务器{new_server_id}", new_server_id)
+            
+            # 添加到临时服务器列表
+            self.temp_servers.append(new_server)
+            # 添加到主服务器列表，使其可以参与轮询
+            self.comfyui_servers.append(new_server)
+            
+            # 启动该服务器的worker
+            await self._manage_worker_for_server(new_server)
+            
+            logger.info(f"已添加临时ComfyUI服务器：{name} ({url})")
+            await self._send_with_auto_recall(event, event.plain_result(
+                f"✅ 临时服务器添加成功！\n"
+                f"名称：{name}\n"
+                f"地址：{self._filter_server_urls(url)}\n"
+                f"提示：该服务器仅在本次运行中有效，重启插件后将失效"
+            ))
+            
+        except Exception as e:
+            logger.error(f"处理添加服务器指令失败: {e}")
+            await self._send_with_auto_recall(event, event.plain_result(f"❌ 添加服务器失败：{str(e)[:500]}"))
+
     async def terminate(self) -> None:
         """终止插件运行，清理所有资源（包括需要持续存在的GUI服务器）"""
         try:
@@ -5456,22 +5875,48 @@ class ModComfyUI(Star):
         else:
             await self._send_with_auto_recall(event, event.plain_result("\n未检测到图片，请重新发送图文消息或引用包含图片的消息"))
             return
-        upload_server = await self._get_next_available_server() or self._get_any_healthy_server()
-        if not upload_server:
-            await self._send_with_auto_recall(event, event.plain_result("\n没有可用服务器上传图片，请稍后再试"))
-            return
+        upload_server = None  # 暂时移除上传逻辑，改为任务处理时上传
+        user_id = str(event.get_sender_id())
+        
+        # 先下载图片到临时位置
         try:
             img_path = await selected_image.convert_to_file_path()
-            image_filename = await self._upload_image_to_comfyui(upload_server, img_path)
+            # 检查下载的文件是否存在且大于10KB（确保图片有效）
+            if not os.path.exists(img_path):
+                raise Exception("图片文件下载失败")
+            file_size = os.path.getsize(img_path)
+            if file_size < 10240:  # 小于10KB
+                logger.warning(f"QQ图片文件过小（{file_size}字节），可能是下载失败或URL过期")
+                raise Exception(f"QQ图片URL已过期或下载失败（文件大小：{file_size}字节），请重新发送图片")
         except Exception as e:
-            await self._send_with_auto_recall(event, event.plain_result(f"\n图片处理失败：{str(e)[:1000]}"))
+            error_msg = str(e)
+            # 检查是否是URL过期相关的错误
+            if "download url has expired" in error_msg.lower() or "expired" in error_msg.lower() or "下载失败" in error_msg:
+                await self._send_with_auto_recall(event, event.plain_result(
+                    "\n❌ QQ图片URL已过期，请重新发送图片后再试"
+                ))
+            elif "文件过小" in error_msg or "下载失败" in error_msg:
+                await self._send_with_auto_recall(event, event.plain_result(f"\n❌ {error_msg}"))
+            else:
+                await self._send_with_auto_recall(event, event.plain_result(f"\n图片处理失败：{error_msg[:1000]}"))
             return
+        
+        # 如果启用了自动保存，则复制到永久文件夹
+        final_img_path = img_path  # 默认使用临时路径
+        if self.enable_auto_save:
+            # 保存到永久文件夹（类似于workflow的逻辑）
+            saved_img_path = await self._save_img2img_image_permanently(img_path, user_id)
+            if saved_img_path:
+                final_img_path = saved_img_path  # 使用永久路径
+                logger.info(f"图片已永久保存到: {saved_img_path}")
+            else:
+                logger.info(f"图片保存失败，使用临时文件: {img_path}")
+        
         try:
             current_seed = random.randint(1, 18446744073709551615) if (self.seed == "随机" or not self.seed) else int(self.seed)
         except (ValueError, TypeError):
             current_seed = random.randint(1, 2147483647)
         # 检查用户任务数限制
-        user_id = str(event.get_sender_id())
         if not await self._increment_user_task_count(user_id):
             await self._send_with_auto_recall(event, event.plain_result(
                 f"\n您当前同时进行的任务数已达上限（{self.max_concurrent_tasks_per_user}个），请等待当前任务完成后再提交新任务！"
@@ -5490,11 +5935,11 @@ class ModComfyUI(Star):
             "current_seed": current_seed,
             "current_width": self.default_width,
             "current_height": self.default_height,
-            "image_filename": image_filename,
+            "img_path": final_img_path,  # 改为本地图片路径
             "denoise": denoise,
             "current_batch_size": current_batch_size,
             "lora_list": lora_list,
-            "user_id": str(event.get_sender_id())
+            "user_id": user_id
         })
         lora_feedback = ""
         if lora_list:
@@ -5511,7 +5956,7 @@ class ModComfyUI(Star):
             f"噪声系数：{denoise}（默认：{self.default_denoise}）\n"
             f"批量数：{current_batch_size}（默认：{self.img2img_batch_size}，最大：{self.max_img2img_batch}）\n"
             f"图片来源：{image_source}\n"
-            f"上传图片：{image_filename[:20]}...（服务器：{upload_server.name}）"
+            f"{'图片已永久保存' if self.enable_auto_save else '图片已下载到临时位置'}"
             + server_feedback
             + lora_feedback
         ))
@@ -5725,6 +6170,13 @@ class ModComfyUI(Star):
                 ))
                 return
 
+            # 检查是否有健康的服务器
+            if not self._get_any_healthy_server():
+                await self._send_with_auto_recall(event, event.plain_result(
+                    f"\n所有ComfyUI服务器均不可用，请稍后再试！"
+                ))
+                return
+
             # 改进的参数解析：使用正则表达式正确处理包含空格、引号、标点的参数值
             import re
             # 使用从后往前扫描的方法解析参数，基于已知参数名
@@ -5815,60 +6267,81 @@ class ModComfyUI(Star):
                 await self._send_with_auto_recall(event, event.plain_result(f"参数输入有误：\n{error_msg}"))
                 return
 
-            # 获取图片输入（如果需要）
-            images = []
-            messages = event.get_messages()
-            has_image = any(isinstance(msg, Image) for msg in messages)
-            
-            # 检查回复中的图片
-            has_image_in_reply = False
-            reply_seg = next((seg for seg in messages if isinstance(seg, Reply)), None)
-            if reply_seg and reply_seg.chain:
-                has_image_in_reply = any(isinstance(seg, Image) for seg in reply_seg.chain)
-
-            # 处理图片输入
+            # 处理图片输入（立即下载图片）
+            image_paths = []
             if config.get("input_nodes"):
+                messages = event.get_messages()
+                has_image = any(isinstance(msg, Image) for msg in messages)
+                
+                # 检查回复中的图片
+                has_image_in_reply = False
+                reply_seg = next((seg for seg in messages if isinstance(seg, Reply)), None)
+                if reply_seg and reply_seg.chain:
+                    has_image_in_reply = any(isinstance(seg, Image) for seg in reply_seg.chain)
+                
                 if not has_image and not has_image_in_reply:
                     await self._send_with_auto_recall(event, event.plain_result("此workflow需要图片输入，请发送图片或引用包含图片的消息"))
                     return
                 
-                # 获取所有图片
+                # 获取所有图片对象
+                image_segs = []
                 if has_image:
                     image_segs = [msg for msg in messages if isinstance(msg, Image)]
                 else:
                     # 从回复中获取所有图片
                     image_segs = [seg for seg in reply_seg.chain if isinstance(seg, Image)]
                 
-                logger.info(f"检测到 {len(image_segs)} 张图片，开始上传")
+                logger.info(f"检测到 {len(image_segs)} 张图片，开始立即下载")
                 
-                # 上传所有图片到ComfyUI服务器
+                # 立即下载所有图片
                 for i, image_seg in enumerate(image_segs):
                     try:
-                        # 选择可用的服务器
-                        upload_server = await self._get_next_available_server() or self._get_any_healthy_server()
-                        if not upload_server:
-                            await self._send_with_auto_recall(event, event.plain_result("当前没有可用的ComfyUI服务器"))
-                            return
-                        
                         # 将图片转换为文件路径
                         img_path = await image_seg.convert_to_file_path()
-                        image_filename = await self._upload_image_to_comfyui(upload_server, img_path)
+                        
+                        # 检查下载的文件是否存在且大于10KB（确保图片有效）
+                        if not os.path.exists(img_path):
+                            raise Exception(f"PERMANENT_ERROR:第 {i+1} 张图片文件下载失败")
+                        file_size = os.path.getsize(img_path)
+                        if file_size < 10240:  # 小于10KB
+                            logger.warning(f"第 {i+1} 张QQ图片文件过小（{file_size}字节），可能是下载失败或URL过期")
+                            raise Exception(f"PERMANENT_ERROR:第 {i+1} 张QQ图片URL已过期或下载失败（文件大小：{file_size}字节），请重新发送图片后再试")
+                        
+                        # 如果启用了自动保存，则复制到永久文件夹
+                        if self.enable_auto_save:
+                            # 为workflow图片创建特殊的永久保存
+                            saved_img_path = await self._save_workflow_image_permanently(img_path, workflow_name, user_id, i)
+                            if saved_img_path:
+                                image_paths.append(saved_img_path)
+                                logger.info(f"第 {i+1} 张图片已永久保存到: {saved_img_path}")
+                            else:
+                                # 保存失败，使用临时文件
+                                image_paths.append(img_path)
+                                logger.info(f"第 {i+1} 张图片保存失败，使用临时文件: {img_path}")
+                        else:
+                            # 未启用自动保存，使用临时文件
+                            image_paths.append(img_path)
+                            logger.info(f"第 {i+1} 张图片已下载到临时位置: {img_path}")
+                            
                     except Exception as e:
-                        await self._send_with_auto_recall(event, event.plain_result(f"图片上传失败：{str(e)[:1000]}"))
-                        return
-                    if not image_filename:
-                        await self._send_with_auto_recall(event, event.plain_result("图片上传失败"))
-                        return
-                    images.append(image_filename)
-                    logger.info(f"成功上传第 {i+1} 张图片: {image_filename}")
+                        error_msg = str(e)
+                        # 检查是否是永久性错误
+                        if error_msg.startswith("PERMANENT_ERROR:"):
+                            await self._send_with_auto_recall(event, event.plain_result(f"图片下载失败：{error_msg.replace('PERMANENT_ERROR:', '')}"))
+                            return
+                        else:
+                            await self._send_with_auto_recall(event, event.plain_result(f"第 {i+1} 张图片处理失败：{error_msg[:200]}"))
+                            return
+                
+                logger.info(f"所有 {len(image_paths)} 张图片下载完成")
 
-            # 构建workflow
-            final_workflow = self._build_workflow(workflow_data, config, params, images)
+            # 构建workflow（图片列表为空，稍后在上传时替换）
+            final_workflow = self._build_workflow(workflow_data, config, params, [])
 
             # 增加用户任务计数
             await self._increment_user_task_count(user_id)
 
-            # 添加到任务队列
+            # 添加到任务队列（包含已下载的图片路径）
             if self.task_queue.full():
                 await self._decrement_user_task_count(user_id)
                 await self._send_with_auto_recall(event, event.plain_result(f"当前任务队列已满（{self.max_task_queue}个任务上限），请稍后再试！"))
@@ -5879,7 +6352,9 @@ class ModComfyUI(Star):
                 "prompt": final_workflow,
                 "workflow_name": workflow_name,
                 "user_id": user_id,
-                "is_workflow": True
+                "is_workflow": True,
+                "image_paths": image_paths,  # 改为已下载的图片路径
+                "workflow_config": config
             })
 
             await self._send_with_auto_recall(event, event.plain_result(
@@ -8073,6 +8548,7 @@ class ConfigManager:
                 })
             except Exception as e:
                 logger.error(f"加载工作流 {workflow_name} 失败: {e}")
+        
         
         return workflows
     
