@@ -1373,8 +1373,9 @@ class ModComfyUI(Star):
         return examples
 
     def _validate_config(self) -> None:
-        if not self.comfyui_servers:
-            raise ValueError("未配置有效的ComfyUI服务器，请检查comfyui_url配置")
+        # 注释掉ComfyUI服务器强制检测，允许插件在没有配置服务器的情况下加载
+        # if not self.comfyui_servers:
+        #     raise ValueError("未配置有效的ComfyUI服务器，请检查comfyui_url配置")
         required_configs = [
             ("ckpt_name", str), ("sampler_name", str), ("scheduler", str),
             ("cfg", (int, float)), ("default_width", int), ("default_height", int),
