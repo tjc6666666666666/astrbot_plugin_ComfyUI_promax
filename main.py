@@ -273,7 +273,10 @@ class ModComfyUI(Star):
         self.enable_fake_forward = config.get("enable_fake_forward", False)
         self.fake_forward_threshold = config.get("fake_forward_threshold", 2)  # 图片数量阈值
         self.fake_forward_qq = config.get("fake_forward_qq", "")  # 伪造的QQ号：0=发送者QQ，1=机器人QQ，其他=指定QQ号
-        
+
+        # 图片格式配置
+        self.return_original_image = config.get("return_original_image", False)  # 是否返回原始格式图片
+
         # Flask应用和GUI相关
         self.app = None
         self.gui_thread: Optional[threading.Thread] = None
@@ -3327,9 +3330,9 @@ class ModComfyUI(Star):
         else:
             # 默认模式：直接返回ComfyUI地址（用于内部机器人消息）
             url_params = {"filename": filename, "type": file_type, "subfolder": subfolder}
-            # 对于图片文件，添加preview参数
+            # 对于图片文件，添加preview参数（根据配置决定是否返回原始格式）
             if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp')):
-                url_params["preview"] = "true"
+                url_params["preview"] = "false" if self.return_original_image else "true"
             query_str = "&".join([f"{k}={quote(v)}" for k, v in url_params.items()])
             return f"{server.url}/view?{query_str}"
 
@@ -7479,7 +7482,8 @@ class ModComfyUI(Star):
                 for server in self.comfyui_servers:
                     if server.healthy:
                         try:
-                            image_url = f"{server.url}/view?filename={original_filename}&type=output&subfolder=&preview=true"
+                            preview_param = "false" if self.return_original_image else "true"
+                            image_url = f"{server.url}/view?filename={original_filename}&type=output&subfolder=&preview={preview_param}"
                             logger.info(f"从服务器 {server.name} 代理图片: {original_filename}")
                             
                             # 下载图片，设置超时
