@@ -320,5 +320,12 @@
         "type": "string",
         "default": "",
         "hint": "伪造转发消息中显示的QQ号。留空=使用默认设置（昵称：Astrbot，头像：机器人头像），0=使用发送用户的QQ号，1=使用机器人QQ号，其他值=使用指定的QQ号"
+    },
+    "return_original_image": {
+        "description": "返回原始格式图片",
+        "type": "bool",
+        "default": false,
+        "hint": "控制是否返回ComfyUI原始格式图片。true=返回原始格式（PNG等，文件较大但质量高，不会被转换为webp压缩），false=返回预览格式（WEBP压缩，文件较小但有质量损失），默认false以保持原有行为",
+        "obvious_hint": true
     }
 }
