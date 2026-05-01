@@ -167,6 +167,7 @@ class ModComfyUI(Star):
         self.gui_server = GuiServer(
             config_dir=config_dir,
             workflow_dir=config_dir / "workflow",
+            user_workflow_dir=self.engine.user_workflow_dir,
             main_config_file=config_dir / "config.json",
             gui_port=gui_port,
             gui_username=config.get("gui_username", "123"),
