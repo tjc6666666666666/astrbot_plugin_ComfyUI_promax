@@ -21,46 +21,52 @@ logger = logging.getLogger("GuiServer")
 class ConfigManager:
     """工作流配置管理器 — 文件系统 CRUD 操作"""
 
-    def __init__(self, config_dir: Path, workflow_dir: Path, main_config_file: Path):
+    def __init__(self, config_dir: Path, workflow_dir: Path, user_workflow_dir: Path,
+                 main_config_file: Path):
         self.config_dir = config_dir
-        self.workflow_dir = workflow_dir
+        self.workflow_dir = workflow_dir          # 内置 workflow（插件目录）
+        self.user_workflow_dir = user_workflow_dir  # 用户 workflow（output 目录）
         self.main_config_file = main_config_file
 
     def get_workflows(self) -> List[Dict[str, Any]]:
-        """获取所有工作流列表"""
+        """获取所有 workflow，合并内置和用户目录"""
         workflows = []
-        if not self.workflow_dir.exists():
-            return workflows
-        for wfn in [f.name for f in self.workflow_dir.iterdir()]:
-            wf_path = self.workflow_dir / wfn
-            if not wf_path.is_dir():
+        seen = set()
+        for scan_dir, source in [(self.user_workflow_dir, "用户"), (self.workflow_dir, "内置")]:
+            if not scan_dir or not scan_dir.exists():
                 continue
-            config_file = wf_path / "config.json"
-            workflow_file = wf_path / "workflow.json"
-            if not config_file.exists() or not workflow_file.exists():
-                continue
-            try:
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                with open(workflow_file, 'r', encoding='utf-8') as f:
-                    wf_data = json.load(f)
-                workflows.append({
-                    "name": wfn,
-                    "config": config,
-                    "workflow": wf_data,
-                    "workflow_json_pretty": json.dumps(wf_data, ensure_ascii=False, indent=2),
-                    "path": str(wf_path)
-                })
-            except Exception as e:
-                logger.error(f"加载工作流 {wfn} 失败: {e}")
+            for wfn in [f.name for f in scan_dir.iterdir()]:
+                wf_path = scan_dir / wfn
+                if not wf_path.is_dir() or wfn in seen:
+                    continue
+                seen.add(wfn)
+                config_file = wf_path / "config.json"
+                workflow_file = wf_path / "workflow.json"
+                if not config_file.exists() or not workflow_file.exists():
+                    continue
+                try:
+                    with open(config_file, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                    with open(workflow_file, 'r', encoding='utf-8') as f:
+                        wf_data = json.load(f)
+                    workflows.append({
+                        "name": wfn,
+                        "config": config,
+                        "workflow": wf_data,
+                        "workflow_json_pretty": json.dumps(wf_data, ensure_ascii=False, indent=2),
+                        "path": str(wf_path),
+                        "source": source
+                    })
+                except Exception as e:
+                    logger.error(f"加载工作流 {wfn} 失败: {e}")
         return workflows
 
     def save_workflow(self, workflow_name: str, config: Dict[str, Any],
                       workflow_data: Dict[str, Any]) -> bool:
-        """保存工作流"""
+        """保存工作流到用户目录"""
         try:
-            wf_path = self.workflow_dir / workflow_name
-            wf_path.mkdir(exist_ok=True)
+            wf_path = self.user_workflow_dir / workflow_name
+            wf_path.mkdir(parents=True, exist_ok=True)
             with open(wf_path / "config.json", 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
             with open(wf_path / "workflow.json", 'w', encoding='utf-8') as f:
@@ -71,9 +77,9 @@ class ConfigManager:
             return False
 
     def delete_workflow(self, workflow_name: str) -> bool:
-        """删除工作流"""
+        """删除用户工作流（仅可删除用户目录中的）"""
         try:
-            wf_path = self.workflow_dir / workflow_name
+            wf_path = self.user_workflow_dir / workflow_name
             if wf_path.exists() and wf_path.is_dir():
                 shutil.rmtree(wf_path)
                 return True
@@ -86,10 +92,12 @@ class ConfigManager:
 class GuiServer:
     """Flask GUI 服务器管理类"""
 
-    def __init__(self, config_dir: Path, workflow_dir: Path, main_config_file: Path,
+    def __init__(self, config_dir: Path, workflow_dir: Path, user_workflow_dir: Path,
+                 main_config_file: Path,
                  gui_port: int = 7777, gui_username: str = "admin", gui_password: str = "admin"):
         self.config_dir = config_dir
         self.workflow_dir = workflow_dir
+        self.user_workflow_dir = user_workflow_dir
         self.main_config_file = main_config_file
         self.gui_port = gui_port
         self.gui_username = gui_username
@@ -104,7 +112,7 @@ class GuiServer:
     def config_manager(self) -> ConfigManager:
         if self._config_manager is None:
             self._config_manager = ConfigManager(
-                self.config_dir, self.workflow_dir, self.main_config_file
+                self.config_dir, self.workflow_dir, self.user_workflow_dir, self.main_config_file
             )
         return self._config_manager
 
@@ -213,7 +221,8 @@ class GuiServer:
                     flash('工作流名称不能为空！', 'error')
                     return redirect(url_for('workflow_new'))
                 wf_path = self.workflow_dir / wfn
-                if wf_path.exists():
+                user_wf_path = self.user_workflow_dir / wfn
+                if wf_path.exists() or user_wf_path.exists():
                     flash('工作流已存在！', 'error')
                     return redirect(url_for('workflow_new'))
 
