@@ -277,6 +277,10 @@ class WorkflowEngine:
     def _init_state(self):
         """初始化运行时状态"""
         self.task_queue: asyncio.Queue = asyncio.Queue(maxsize=self.max_task_queue)
+        # AI workflow 工具可把任务定向到某台服务器。未指定服务器的任务仍
+        # 使用上面的公共队列，保持原有调度逻辑不变。
+        self.server_task_queues: Dict[int, asyncio.Queue] = {}
+        self.task_submit_lock = asyncio.Lock()
         self.server_monitor_task: Optional[asyncio.Task] = None
         self.history_cleanup_task: Optional[asyncio.Task] = None
         self.server_monitor_running: bool = False
@@ -652,21 +656,44 @@ class WorkflowEngine:
         time_hash = hashlib.sha256(str(time_ms).encode("utf-8")).hexdigest()[:6].upper()
         return f"{safe_name}_{seq_num}_{time_hash}"
 
-    async def submit_task(self, task_data: dict) -> bool:
+    def _get_server_task_queue(self, server: ServerState) -> asyncio.Queue:
+        """获取服务器的定向任务队列（按需创建）。"""
+        queue = self.server_task_queues.get(server.server_id)
+        if queue is None:
+            queue = asyncio.Queue()
+            self.server_task_queues[server.server_id] = queue
+        return queue
+
+    def queued_task_count(self) -> int:
+        """返回公共队列和所有服务器定向队列中的任务总数。"""
+        return self.task_queue.qsize() + sum(
+            queue.qsize() for queue in self.server_task_queues.values()
+        )
+
+    def server_queued_task_count(self, server: ServerState) -> int:
+        """返回指定服务器定向队列中的任务数。"""
+        queue = self.server_task_queues.get(server.server_id)
+        return queue.qsize() if queue else 0
+
+    async def submit_task(self, task_data: dict,
+                          server: Optional[ServerState] = None) -> bool:
         """
         提交任务到引擎队列
         
         Args:
             task_data: 任务数据字典，必须包含 user_id 字段
-                      根据任务类型包含不同字段
+                       根据任务类型包含不同字段
+            server: 可选的目标服务器；未指定时进入原有公共队列
         
         Returns:
             是否成功入队
         """
-        if self.task_queue.full():
-            return False
-        await self.task_queue.put(task_data)
-        return True
+        async with self.task_submit_lock:
+            if self.queued_task_count() >= self.max_task_queue:
+                return False
+            queue = self._get_server_task_queue(server) if server else self.task_queue
+            queue.put_nowait(task_data)
+            return True
 
     async def _increment_user_task_count(self, user_id: str) -> bool:
         async with self.user_task_lock:
@@ -740,19 +767,34 @@ class WorkflowEngine:
 
     async def _check_and_clear_queue_if_no_healthy_servers(self):
         has_healthy = any(s.healthy for s in self.comfyui_servers)
-        if not has_healthy and self.task_queue.qsize() > 0:
-            logger.warning(f"所有服务器均不健康，清空任务队列（{self.task_queue.qsize()}个任务）")
-            while not self.task_queue.empty():
-                try:
-                    td = await asyncio.wait_for(self.task_queue.get(), timeout=1.0)
-                    uid = td.get("user_id")
-                    if uid:
-                        await self._decrement_user_task_count(uid)
-                    self.task_queue.task_done()
-                except asyncio.TimeoutError:
-                    break
-                except Exception as e:
-                    logger.error(f"清空任务队列时出错：{e}")
+        if not has_healthy and self.queued_task_count() > 0:
+            logger.warning(f"所有服务器均不健康，清空任务队列（{self.queued_task_count()}个任务）")
+            queues = [self.task_queue, *self.server_task_queues.values()]
+            for queue in queues:
+                while not queue.empty():
+                    try:
+                        td = await asyncio.wait_for(queue.get(), timeout=1.0)
+                        uid = td.get("user_id")
+                        if uid:
+                            await self._decrement_user_task_count(uid)
+                        queue.task_done()
+                    except asyncio.TimeoutError:
+                        break
+                    except Exception as e:
+                        logger.error(f"清空任务队列时出错：{e}")
+
+    async def _get_task_for_server(self, server: ServerState) -> Tuple[asyncio.Queue, dict]:
+        """优先取得发给本服务器的任务，否则沿用公共 FIFO 队列。"""
+        server_queue = self._get_server_task_queue(server)
+        try:
+            return server_queue, server_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+
+        # 使用短超时让新到达的定向任务能及时唤醒空闲 worker；公共队列
+        # 有任务时仍会立即返回，不改变原有公共任务的处理方式。
+        task_data = await asyncio.wait_for(self.task_queue.get(), timeout=1.0)
+        return self.task_queue, task_data
 
     async def _check_server_health(self, server: ServerState) -> bool:
         try:
@@ -853,14 +895,14 @@ class WorkflowEngine:
                     logger.info(f"{worker_name}检测到服务器{server.name}不健康，退出")
                     return
                 try:
-                    task_data = await asyncio.wait_for(self.task_queue.get(), timeout=10.0)
+                    source_queue, task_data = await self._get_task_for_server(server)
                 except asyncio.TimeoutError:
                     if not server.healthy:
                         return
                     continue
                 try:
                     if not server.healthy:
-                        await self.task_queue.put(task_data)
+                        await source_queue.put(task_data)
                         return
                     result = await self._process_task_on_server(server, task_data)
                     if cb := task_data.get("callback"):
@@ -876,7 +918,7 @@ class WorkflowEngine:
                     if not server.healthy:
                         logger.info(f"{worker_name}检测到服务器{server.name}故障，将任务放回队列")
                         task_data.pop("callback", None)
-                        await self.task_queue.put(task_data)
+                        await source_queue.put(task_data)
                         return
                     logger.error(f"{worker_name}处理任务失败：{str(e)[:500]}")
                     # 通过回调通知用户错误
@@ -896,7 +938,7 @@ class WorkflowEngine:
                         else:
                             cb(err_result)
                 finally:
-                    self.task_queue.task_done()
+                    source_queue.task_done()
         except asyncio.CancelledError:
             logger.info(f"{worker_name}被取消")
         except Exception as e:

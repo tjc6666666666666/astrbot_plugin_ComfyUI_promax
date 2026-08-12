@@ -2094,7 +2094,7 @@ background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh}}
         if not self._check_group_whitelist(event):
             return "❌ 当前群聊不在白名单中！"
 
-        queued = eng.task_queue.qsize()
+        queued = eng.queued_task_count()
         total_user_tasks = sum(eng.user_task_counts.values())
         current_user_id = str(event.get_sender_id())
         current_user_tasks = eng.user_task_counts.get(current_user_id, 0)
@@ -2117,11 +2117,13 @@ background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh}}
             for srv in eng.comfyui_servers:
                 state = "可用" if srv.healthy else "不可用"
                 busy = "忙碌" if srv.busy else "空闲"
+                directed_queued = eng.server_queued_task_count(srv)
                 retry_after = ""
                 if srv.retry_after:
                     retry_after = f"，重试时间：{srv.retry_after.strftime('%Y-%m-%d %H:%M:%S')}"
                 lines.append(
-                    f"- {srv.name}：{state}，{busy}，失败次数：{srv.failure_count}{retry_after}"
+                    f"- {srv.name}：{state}，{busy}，定向排队：{directed_queued}，"
+                    f"失败次数：{srv.failure_count}{retry_after}"
                 )
         else:
             lines.append("服务器详情：暂无配置")
@@ -2140,12 +2142,14 @@ background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh}}
 
     @llm_tool(name="comfyui_workflow_run")
     async def comfyui_workflow_run(self, event: AstrMessageEvent, workflow: str,
-                                   parameters: str = "", input_images: list = None):
+                                   parameters: str = "", input_images: list = None,
+                                   server_name: str = ""):
         """Run a selected ComfyUI workflow with parameters.
         Args:
             workflow(string): Workflow id, prefix, or name from comfyui_workflow_list.
             parameters(string): Prefer a JSON object string, e.g. "{\"提示词\":\"cat with blue eyes\", \"宽\":1024}". Text like "提示词:cat 宽:1024" is accepted only for compatibility. Use parameter names or aliases shown by comfyui_workflow_list.
             input_images(list): Optional image input array for workflows that need images. Use a JSON array, e.g. ["https://example.com/a.png", "/AstrBot/data/temp/a.png"]. Each item can be an http/https URL or a local path. Local paths support AstrBot temp directory files and non-sandbox workspace files. AstrBot temp directory paths usually contain data/temp; files retrieved from the sandbox with astrbot_download_file are automatically placed in the temp directory. If omitted, images are read from the current message or replied message context.
+            server_name(string): Optional exact ComfyUI server name. When provided, the workflow waits for and runs only on that server. Leave empty to use the normal shared queue.
 
         Returns:
             string: Submission status. On success, includes a task ID for later reference.
@@ -2155,7 +2159,23 @@ background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh}}
             return "❌ 当前群聊不在白名单中！"
         if not eng._is_in_open_time():
             return f"当前未开放～开放时间：{eng._get_open_time_desc()}"
-        if not eng._get_any_healthy_server():
+
+        selected_server = None
+        requested_server_name = str(server_name or "").strip()
+        if requested_server_name:
+            selected_server = next(
+                (srv for srv in eng.comfyui_servers
+                 if srv.name.casefold() == requested_server_name.casefold()),
+                None
+            )
+            if selected_server is None:
+                configured_names = "、".join(srv.name for srv in eng.comfyui_servers) or "暂无"
+                return f"未找到服务器「{requested_server_name}」。可选服务器：{configured_names}"
+            if (not selected_server.healthy
+                    or (selected_server.retry_after
+                        and datetime.now() < selected_server.retry_after)):
+                return f"服务器「{selected_server.name}」当前不可用，请稍后重试或不指定 server_name。"
+        elif not eng._get_any_healthy_server():
             return "当前没有可用的ComfyUI服务器。"
 
         wfn, wf_info, err = self._resolve_workflow(workflow)
@@ -2196,7 +2216,7 @@ background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh}}
         uid = str(event.get_sender_id())
         if not await eng._increment_user_task_count(uid):
             return f"您的并发任务数已达上限（{eng.max_concurrent_tasks_per_user}个）"
-        if eng.task_queue.full():
+        if eng.queued_task_count() >= eng.max_task_queue:
             await eng._decrement_user_task_count(uid)
             return f"任务队列已满（{eng.max_task_queue}个上限）"
 
@@ -2211,11 +2231,17 @@ background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh}}
             "workflow_config": cfg,
             "is_ai_initiated": True,
             "callback": self._make_result_callback(event, "workflow")
-        })
+        }, server=selected_server)
         if not submitted:
             await eng._decrement_user_task_count(uid)
             return f"任务队列已满（{eng.max_task_queue}个上限）"
         title = cfg.get("name", wfn)
+        if selected_server:
+            return (
+                f"Workflow「{title}」已加入服务器「{selected_server.name}」的定向队列"
+                f"（任务ID：{task_id}，该服务器定向排队："
+                f"{eng.server_queued_task_count(selected_server)}个）"
+            )
         servers = [s.name for s in eng.comfyui_servers if s.healthy]
         sf = f"\n可用服务器：{'、'.join(servers)}" if servers else ""
         return f"Workflow「{title}」已加入队列（任务ID：{task_id}，排队：{eng.task_queue.qsize()}个）{sf}"
